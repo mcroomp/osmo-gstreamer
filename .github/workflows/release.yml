@@ -29,10 +29,10 @@ jobs:
         with:
           toolchain: "1.99.1"
       - id: version
-        shell: pwsh
+        shell: bash
         env:
           RELEASE_TAG: ${{ github.ref_name }}
-        run: ./scripts/validate-release.ps1 -Tag $env:RELEASE_TAG
+        run: bash scripts/validate-release.sh "$RELEASE_TAG"
 
   native:
     needs: validate
@@ -54,7 +54,7 @@ jobs:
     timeout-minutes: 45
     defaults:
       run:
-        shell: pwsh
+        shell: bash
     env:
       RELEASE_VERSION: ${{ needs.validate.outputs.version }}
       RELEASE_TARGET: ${{ matrix.target }}
@@ -80,6 +80,7 @@ jobs:
         run: brew install gstreamer pkg-config
       - name: Configure Windows SDK
         if: runner.os == 'Windows'
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           # SHA256 from microsoft/winget-pkgs, gstreamerproject.gstreamer 1.28.8 x64.
@@ -100,34 +101,51 @@ jobs:
           "GSTREAMER_ROOT_X86_64=$env:GSTREAMER_ROOT_X86_64" >> $env:GITHUB_ENV
       - name: Remap private build paths
         run: |
-          "RUSTFLAGS=--remap-path-prefix=$env:GITHUB_WORKSPACE=/osmo-gstreamer --remap-path-prefix=$HOME=/build-home" >> $env:GITHUB_ENV
+          workspace="$GITHUB_WORKSPACE"
+          build_home="$HOME"
+          if [ "$RUNNER_OS" = Windows ]; then
+            workspace="$(cygpath -m "$workspace")"
+            build_home="$(cygpath -m "$USERPROFILE")"
+          fi
+          echo "RUSTFLAGS=--remap-path-prefix=$workspace=/osmo-gstreamer --remap-path-prefix=$build_home=/build-home" >> "$GITHUB_ENV"
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --locked --workspace --all-targets --all-features --target $env:RELEASE_TARGET -- -D warnings
-      - run: cargo test --locked --release --workspace --all-features --target $env:RELEASE_TARGET
-      - run: cargo build --locked --release --workspace --all-features --target $env:RELEASE_TARGET
+      - run: cargo clippy --locked --workspace --all-targets --all-features --target "$RELEASE_TARGET" -- -D warnings
+      - run: cargo test --locked --release --workspace --all-features --target "$RELEASE_TARGET"
+      - run: cargo build --locked --release --workspace --all-features --target "$RELEASE_TARGET"
       - name: Generate dependency notices
         run: |
           cargo install cargo-about --version 0.9.3 --features cli --locked
-          if ($LASTEXITCODE -ne 0) { throw 'Could not install the pinned notice generator.' }
-          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          mkdir -p dist
           cargo about generate --locked --workspace --all-features --fail scripts/licenses.hbs -o dist/THIRD-PARTY-LICENSES.txt
-          if ($LASTEXITCODE -ne 0) { throw 'Dependency notice generation failed; review licenses before release.' }
-      - name: Inspect native dependencies
+      - name: Inspect Windows native dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          if ($IsWindows) {
-            $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-            $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-            if ($LASTEXITCODE -ne 0 -or -not $vs) { throw 'Could not locate MSVC.' }
-            & $env:ComSpec /c "call `"$vs\Common7\Tools\VsDevCmd.bat`" -no_logo -arch=amd64 && dumpbin /dependents target\$env:RELEASE_TARGET\release\gstosmo.dll && dumpbin /dependents target\$env:RELEASE_TARGET\release\osmo-pair.exe"
-          } elseif ($IsMacOS) {
-            otool -L "target/$env:RELEASE_TARGET/release/libgstosmo.dylib" "target/$env:RELEASE_TARGET/release/osmo-pair"
-          } else {
-            $dependencies = ldd "target/$env:RELEASE_TARGET/release/libgstosmo.so" "target/$env:RELEASE_TARGET/release/osmo-pair"
-            Write-Host ($dependencies -join "`n")
-            if (($dependencies -join "`n") -match 'not found') { throw 'A native runtime dependency is missing.' }
-          }
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $vs) { throw 'Could not locate MSVC.' }
+          & $env:ComSpec /c "call `"$vs\Common7\Tools\VsDevCmd.bat`" -no_logo -arch=amd64 && dumpbin /dependents target\$env:RELEASE_TARGET\release\gstosmo.dll && dumpbin /dependents target\$env:RELEASE_TARGET\release\osmo-pair.exe"
           if ($LASTEXITCODE -ne 0) { throw 'Native dependency inspection failed.' }
-      - run: ./scripts/package-native-release.ps1 -Version $env:RELEASE_VERSION -Target $env:RELEASE_TARGET
+      - name: Inspect Unix native dependencies
+        if: runner.os != 'Windows'
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            otool -L "target/$RELEASE_TARGET/release/libgstosmo.dylib" "target/$RELEASE_TARGET/release/osmo-pair"
+          else
+            dependencies="$(ldd "target/$RELEASE_TARGET/release/libgstosmo.so" "target/$RELEASE_TARGET/release/osmo-pair")"
+            printf '%s\n' "$dependencies"
+            if grep -Fq 'not found' <<< "$dependencies"; then
+              echo 'A native runtime dependency is missing.' >&2
+              exit 1
+            fi
+          fi
+      - name: Package Windows release
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/package-windows-release.ps1 -Version $env:RELEASE_VERSION -Target $env:RELEASE_TARGET
+      - name: Package Unix release
+        if: runner.os != 'Windows'
+        run: bash scripts/package-native-release.sh "$RELEASE_VERSION" "$RELEASE_TARGET"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: native-${{ matrix.target }}
@@ -194,10 +212,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libdbus-1-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev pkg-config
       - name: Publish Rust crates in dependency order
-        shell: pwsh
+        shell: bash
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: ./scripts/publish-crates.ps1 -Version $env:RELEASE_VERSION
+        run: bash scripts/publish-crates.sh "$RELEASE_VERSION"
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}

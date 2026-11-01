@@ -363,14 +363,24 @@ git push origin v0.1.0
 
 Rust crates publish in dependency order. Publication is not transactional:
 if the second crate or GitHub upload fails, the first crate may already be
-public. Re-run the failed workflow after resolving the error. Already-published
+public. Before any upload, `cargo package --locked --workspace --all-features`
+rebuilds and verifies both archives using the source job's command. Both
+checksums must match the audited artifacts; a publish dry run is not used to
+locate the archives. Re-run the failed workflow after resolving the error. Already-published
 crate versions are accepted only if their checksum matches the source artifact;
 different contents require a new version/tag. Draft GitHub uploads can be retried,
 but published release assets are not overwritten.
 
-Run `pwsh -File .\scripts\test-release.ps1` to test tag validation, publishing
-order, retry checksums and missing-token failures with synthetic registry
-responses. These tests never upload crates or access camera hardware.
+Release automation uses Bash, with PowerShell reserved for Windows SDK setup,
+MSVC dependency inspection and ZIP packaging. The Bash release scripts use
+`jq`, `curl` and `sha256sum` on the Linux CI runners.
+
+Run `bash scripts/test-release.sh` from the repository root (Git Bash on
+Windows) to test tag validation, publishing
+order, retry checksums, packaging/upload failures and missing-token failures
+with synthetic registry responses. These tests never upload crates or access
+camera hardware. Linux and macOS archive layouts are also tested with synthetic
+binaries and plugin inspection.
 
 ### Installing native archives
 

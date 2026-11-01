@@ -70,6 +70,9 @@ provenance or safety requirements. Use [README.md](README.md) for build commands
 
 ## Tooling, validation and release
 
+- Prefer Bash shell scripts and CI steps. Use PowerShell only for operations
+  that require Windows-specific tooling.
+
 - Use the pinned Rust toolchain and uv for Python. The Python project uses the
   named Microsoft package feed; do not silently switch indexes, disable TLS
   verification or add unreviewed package sources.
