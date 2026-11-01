@@ -1,5 +1,5 @@
 [package]
-name = "osmo-camera"
+name = "unofficial-osmo-camera"
 description = "Unofficial Rust library for Osmo Nano camera interoperability"
 version.workspace = true
 edition.workspace = true
@@ -9,7 +9,7 @@ authors.workspace = true
 readme.workspace = true
 homepage.workspace = true
 repository.workspace = true
-documentation = "https://docs.rs/osmo-camera"
+documentation = "https://docs.rs/unofficial-osmo-camera"
 keywords = ["osmo", "camera", "interoperability", "video"]
 categories = ["multimedia::video", "hardware-support"]
 publish = ["crates-io"]

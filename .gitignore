@@ -1,5 +1,5 @@
 /target/
-/python/osmo-camera/target/
+/python/unofficial-osmo-camera/target/
 **/.venv/
 **/__pycache__/
 **/*.pyc

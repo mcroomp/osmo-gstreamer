@@ -1,5 +1,5 @@
 [package]
-name = "gst-plugin-osmo"
+name = "gst-plugin-unofficial-osmo"
 description = "Unofficial Osmo Nano camera GStreamer source"
 version.workspace = true
 edition.workspace = true
@@ -9,7 +9,7 @@ authors.workspace = true
 readme.workspace = true
 homepage.workspace = true
 repository.workspace = true
-documentation = "https://docs.rs/gst-plugin-osmo"
+documentation = "https://docs.rs/gst-plugin-unofficial-osmo"
 keywords = ["osmo", "camera", "gstreamer", "interoperability", "video"]
 categories = ["multimedia::video", "multimedia::encoding", "hardware-support"]
 publish = ["crates-io"]
@@ -20,7 +20,7 @@ name = "gstosmo"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-osmo-camera = { version = "=0.1.0", path = "../osmo-camera", features = ["ble"] }
+unofficial-osmo-camera = { version = "=0.1.0", path = "../unofficial-osmo-camera", features = ["ble"] }
 gstreamer.workspace = true
 gstreamer-base.workspace = true
 log.workspace = true

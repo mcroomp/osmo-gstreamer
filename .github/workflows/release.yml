@@ -175,7 +175,7 @@ jobs:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
         run: |
           mkdir dist
-          for crate in osmo-camera gst-plugin-osmo; do
+          for crate in unofficial-osmo-camera gst-plugin-unofficial-osmo; do
             archive="target/package/$crate-$RELEASE_VERSION.crate"
             tar -tzf "$archive"
             cp "$archive" dist/

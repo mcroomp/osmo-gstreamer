@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 
 #[pyfunction]
 fn version() -> &'static str {
-    osmo_camera::version()
+    unofficial_osmo_camera::version()
 }
 
 #[pymodule]

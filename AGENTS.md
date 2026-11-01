@@ -5,9 +5,9 @@
 These rules apply to the entire repository. Read this file and the relevant
 component instructions before editing:
 
-- [Rust camera library](crates/osmo-camera/AGENTS.md)
-- [Python testing wrapper](python/osmo-camera/AGENTS.md)
-- [GStreamer plugin](crates/gst-plugin-osmo/AGENTS.md)
+- [Rust camera library](crates/unofficial-osmo-camera/AGENTS.md)
+- [Python testing wrapper](python/unofficial-osmo-camera/AGENTS.md)
+- [GStreamer plugin](crates/gst-plugin-unofficial-osmo/AGENTS.md)
 
 Component rules supplement these rules; they cannot relax publication,
 provenance or safety requirements. Use [README.md](README.md) for build commands.

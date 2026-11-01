@@ -11,7 +11,7 @@ if ! metadata=$(cargo metadata --locked --no-deps --format-version 1); then
     echo 'Could not read locked Cargo metadata.' >&2
     exit 1
 fi
-for name in osmo-camera gst-plugin-osmo; do
+for name in unofficial-osmo-camera gst-plugin-unofficial-osmo; do
     if ! package=$(jq -ce --arg name "$name" '[.packages[] | select(.name == $name)] | select(length == 1) | .[0]' <<< "$metadata"); then
         echo "Tag '$tag' must match exactly one $name package." >&2
         exit 1
@@ -48,10 +48,10 @@ for name in osmo-camera gst-plugin-osmo; do
     fi
 done
 if ! jq -e --arg version "=$version" '
-    [.packages[] | select(.name == "gst-plugin-osmo") |
-        .dependencies[] | select(.name == "osmo-camera") | .req] == [$version]
+    [.packages[] | select(.name == "gst-plugin-unofficial-osmo") |
+        .dependencies[] | select(.name == "unofficial-osmo-camera") | .req] == [$version]
 ' <<< "$metadata" >/dev/null; then
-    echo "gst-plugin-osmo must depend on osmo-camera with version '=$version'." >&2
+    echo "gst-plugin-unofficial-osmo must depend on unofficial-osmo-camera with version '=$version'." >&2
     exit 1
 fi
 if [[ -n ${GITHUB_OUTPUT:-} ]]; then

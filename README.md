@@ -21,9 +21,15 @@ These safeguards do not constitute legal advice or guarantee legal clearance.
 
 | Component | Location | Responsibility |
 |-----------|----------|----------------|
-| Rust library | [crates/osmo-camera](crates/osmo-camera) | Protocol, transport, camera ownership and lifecycle |
-| Python wrapper | [python/osmo-camera](python/osmo-camera) | Thin PyO3/maturin bindings for testing the Rust library |
-| GStreamer plugin | [crates/gst-plugin-osmo](crates/gst-plugin-osmo) | Adapt the Rust library to a GStreamer source |
+| Rust library | [crates/unofficial-osmo-camera](crates/unofficial-osmo-camera) | Protocol, transport, camera ownership and lifecycle |
+| Python wrapper | [python/unofficial-osmo-camera](python/unofficial-osmo-camera) | Thin PyO3/maturin bindings for testing the Rust library |
+| GStreamer plugin | [crates/gst-plugin-unofficial-osmo](crates/gst-plugin-unofficial-osmo) | Adapt the Rust library to a GStreamer source |
+
+The Cargo packages are `unofficial-osmo-camera` (Rust import
+`unofficial_osmo_camera`) and `gst-plugin-unofficial-osmo`. The Python testing
+distribution is also named `unofficial-osmo-camera`, but its import remains
+`osmo_camera`. The CLI `osmo-pair`, GStreamer plugin `osmo`, element `osmosrc`,
+native plugin filenames and `osmo-camera` GStreamer debug category are unchanged.
 
 The Rust library implements LAN preview and optional BLE setup for Osmo Nano.
 The library exposes a path-independent `CameraProfile` that can be loaded from
@@ -54,7 +60,7 @@ Run these commands from the repository root:
 ```powershell
 cargo test --locked
 cargo fmt --all -- --check
-cargo clippy --locked -p osmo-camera --all-targets -- -D warnings
+cargo clippy --locked -p unofficial-osmo-camera --all-targets -- -D warnings
 ```
 
 The default workspace member is the base library, so these tests do not need
@@ -69,19 +75,19 @@ feed, not a Microsoft-specific interpreter.
 Tool versions are resolved from that feed; maturin currently resolves to 1.15.0.
 
 ```powershell
-uv sync --locked --project .\python\osmo-camera
-uv run --project .\python\osmo-camera --no-sync maturin develop --locked --manifest-path .\python\osmo-camera\Cargo.toml
-uv run --project .\python\osmo-camera --no-sync python -m unittest discover -s .\python\osmo-camera\tests
-uv run --project .\python\osmo-camera --no-sync ruff check .\python\osmo-camera
-uv run --project .\python\osmo-camera --no-sync ruff format --check .\python\osmo-camera
-cargo fmt --manifest-path .\python\osmo-camera\Cargo.toml -- --check
+uv sync --locked --project .\python\unofficial-osmo-camera
+uv run --project .\python\unofficial-osmo-camera --no-sync maturin develop --locked --manifest-path .\python\unofficial-osmo-camera\Cargo.toml
+uv run --project .\python\unofficial-osmo-camera --no-sync python -m unittest discover -s .\python\unofficial-osmo-camera\tests
+uv run --project .\python\unofficial-osmo-camera --no-sync ruff check .\python\unofficial-osmo-camera
+uv run --project .\python\unofficial-osmo-camera --no-sync ruff format --check .\python\unofficial-osmo-camera
+cargo fmt --manifest-path .\python\unofficial-osmo-camera\Cargo.toml -- --check
 ```
 
 Re-run `maturin develop` after changing Rust code. For a distributable wheel
 and source archive:
 
 ```powershell
-uv run --project .\python\osmo-camera --no-sync maturin build --locked --release --sdist --manifest-path .\python\osmo-camera\Cargo.toml --out .\dist
+uv run --project .\python\unofficial-osmo-camera --no-sync maturin build --locked --release --sdist --manifest-path .\python\unofficial-osmo-camera\Cargo.toml --out .\dist
 ```
 
 ## GStreamer plugin
@@ -113,7 +119,7 @@ the pinned Rust toolchain. It uses sudo only for apt packages; run it as your
 normal user from any directory. Setup is safe to rerun.
 
 ```powershell
-cargo build --locked -p gst-plugin-osmo
+cargo build --locked -p gst-plugin-unofficial-osmo
 cargo test --locked --workspace
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 $env:GST_PLUGIN_PATH = (Resolve-Path .\target\debug).Path
@@ -139,8 +145,8 @@ the camera and configures the camera to join that Wi-Fi network; it does not
 change the computer's Wi-Fi settings:
 
 ```powershell
-cargo run --locked -p osmo-camera --features ble --bin osmo-pair
-cargo run --locked -p osmo-camera --features ble --bin osmo-pair -- --camera office
+cargo run --locked -p unofficial-osmo-camera --features ble --bin osmo-pair
+cargo run --locked -p unofficial-osmo-camera --features ble --bin osmo-pair -- --camera office
 ```
 
 The pairing utility prints the camera's Wi-Fi MAC and looks for a matching
@@ -195,8 +201,8 @@ To diagnose camera LAN preview startup without opening the GStreamer viewer,
 run the pairing utility's opt-in smoke test:
 
 ```powershell
-$env:RUST_LOG = "osmo_camera=debug,osmo_pair=info"
-cargo run --locked -p osmo-camera --features ble --bin osmo-pair -- --smoke-test
+$env:RUST_LOG = "unofficial_osmo_camera=debug,osmo_pair=info"
+cargo run --locked -p unofficial-osmo-camera --features ble --bin osmo-pair -- --smoke-test
 ```
 
 It uses the selected profile (add `--camera PROFILE` if needed). Preview
@@ -215,8 +221,8 @@ display.
 For a longer timing diagnostic, run:
 
 ```powershell
-$env:RUST_LOG = "osmo_pair=debug,osmo_camera=info"
-cargo run --locked -p osmo-camera --features ble --bin osmo-pair -- --timing-test 60
+$env:RUST_LOG = "osmo_pair=debug,unofficial_osmo_camera=info"
+cargo run --locked -p unofficial-osmo-camera --features ble --bin osmo-pair -- --timing-test 60
 ```
 
 The duration is 1-300 seconds after preview startup. Flip the camera during
@@ -260,7 +266,7 @@ Detailed diagnostics include preview command IDs, endpoints, response status,
 transport sequences, elapsed time, and retransmission counts. Reply timeouts
 include buffered-message and control-window state. Complete video arrival gaps
 of at least 100 ms are warnings; cleanup stages log their own failures separately
-from startup or streaming failures. Set `RUST_LOG=osmo_camera=trace` for CLI
+from startup or streaming failures. Set `RUST_LOG=unofficial_osmo_camera=trace` for CLI
 control-feedback details, or `GST_DEBUG=osmo-camera:7` for GStreamer.
 Logs go to stderr/the host logger, not automatically to files; redirect stderr
 to a local file when retaining diagnostics. Do not publish logs without review.
@@ -301,14 +307,14 @@ to a local file when retaining diagnostics. Do not publish logs without review.
   formatting and line endings consistent across platforms.
 
 CI pins uv 0.13.6. To intentionally refresh dependencies, run `cargo update`
-in each Cargo project and `uv lock --upgrade --project .\python\osmo-camera`,
+in each Cargo project and `uv lock --upgrade --project .\python\unofficial-osmo-camera`,
 then run the checks above. Update the toolchain pin and its CI entries together.
 
 ## Releases
 
 [Release automation](.github/workflows/release.yml) runs when an authorized
-maintainer pushes a `vX.Y.Z` tag. It publishes `osmo-camera` and
-`gst-plugin-osmo` to crates.io, then publishes a GitHub Release containing
+maintainer pushes a `vX.Y.Z` tag. It publishes `unofficial-osmo-camera` and
+`gst-plugin-unofficial-osmo` to crates.io, then publishes a GitHub Release containing
 the two `.crate` source archives, checksums, and native archives for:
 
 - Windows x64 MSVC: `gstosmo.dll` and `osmo-pair.exe`.
@@ -347,7 +353,7 @@ provenance or redistribution audit.
 ### Cutting a release
 
 Update the workspace version in `Cargo.toml` and the plugin's exact
-`osmo-camera` dependency version in `crates/gst-plugin-osmo/Cargo.toml`.
+`unofficial-osmo-camera` dependency version in `crates/gst-plugin-unofficial-osmo/Cargo.toml`.
 Refresh both Cargo lockfiles as needed and run the documented component checks.
 Keep both crate `LICENSE` copies identical to the root MIT license.
 The crates inherit author, homepage, repository and README metadata from the

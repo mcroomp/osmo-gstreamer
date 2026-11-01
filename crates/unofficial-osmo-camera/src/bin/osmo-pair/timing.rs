@@ -1,5 +1,5 @@
-use osmo_camera::{AccessUnit, CameraSession, Error, Result, preview::nals};
 use std::time::{Duration, Instant};
+use unofficial_osmo_camera::{AccessUnit, CameraSession, Error, Result, preview::nals};
 
 const POLL: Duration = Duration::from_millis(100);
 const GAP_WARNING: Duration = Duration::from_millis(100);

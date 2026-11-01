@@ -3,7 +3,7 @@ set -euo pipefail
 
 scripts=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 metadata=$(cargo metadata --locked --no-deps --format-version 1)
-version=$(jq -er '.packages[] | select(.name == "osmo-camera") | .version' <<< "$metadata")
+version=$(jq -er '.packages[] | select(.name == "unofficial-osmo-camera") | .version' <<< "$metadata")
 temp=$(mktemp -d)
 trap 'rm -f -- "$temp"/*.log "$temp/output"; rm -rf -- "$temp/fixtures"; rmdir -- "$temp"' EXIT
 mkdir -p "$temp/fixtures/dist" "$temp/fixtures/target/package"
@@ -34,7 +34,7 @@ assert_fails 'Configure the CARGO_REGISTRY_TOKEN' bash "$scripts/publish-crates.
 export CARGO_REGISTRY_TOKEN=synthetic-test-token
 export TEST_VERSION="$version" TEST_EXISTING_CAMERA='' TEST_EXISTING_PLUGIN=''
 export TEST_ALTER_ARCHIVE='' TEST_OMIT_ARCHIVE='' TEST_PACKAGE_EXIT=0 TEST_PUBLISH_EXIT=0 TEST_HTTP_STATUS=404
-for name in osmo-camera gst-plugin-osmo; do
+for name in unofficial-osmo-camera gst-plugin-unofficial-osmo; do
     printf 'synthetic archive for %s\n' "$name" > "dist/$name-$version.crate"
 done
 
@@ -50,8 +50,8 @@ curl() {
     name=${uri%/*}
     name=${name##*/}
     case "$name" in
-        osmo-camera) checksum=$TEST_EXISTING_CAMERA ;;
-        gst-plugin-osmo) checksum=$TEST_EXISTING_PLUGIN ;;
+        unofficial-osmo-camera) checksum=$TEST_EXISTING_CAMERA ;;
+        gst-plugin-unofficial-osmo) checksum=$TEST_EXISTING_PLUGIN ;;
         *) echo 'Unexpected registry lookup.' >&2; return 1 ;;
     esac
     if [[ -n $checksum ]]; then
@@ -67,7 +67,7 @@ cargo() {
         package)
             [[ $* == 'package --locked --workspace --all-features' ]] || return 1
             echo package >> calls.log
-            for name in osmo-camera gst-plugin-osmo; do
+            for name in unofficial-osmo-camera gst-plugin-unofficial-osmo; do
                 [[ $name != "$TEST_OMIT_ARCHIVE" ]] || continue
                 cp "dist/$name-$TEST_VERSION.crate" "target/package/$name-$TEST_VERSION.crate"
                 if [[ $name == "$TEST_ALTER_ARCHIVE" ]]; then
@@ -100,24 +100,24 @@ assert_calls() {
 }
 
 bash "$scripts/publish-crates.sh" "$version"
-assert_calls $'package\nosmo-camera\ngst-plugin-osmo'
+assert_calls $'package\nunofficial-osmo-camera\ngst-plugin-unofficial-osmo'
 export TEST_EXISTING_PLUGIN
 TEST_EXISTING_PLUGIN=$(printf different-checksum | sha256sum)
 TEST_EXISTING_PLUGIN=${TEST_EXISTING_PLUGIN%% *}
 assert_fails 'already exists with different contents' bash "$scripts/publish-crates.sh" "$version"
 assert_calls ''
 export TEST_EXISTING_CAMERA
-TEST_EXISTING_CAMERA=$(sha256sum "dist/osmo-camera-$version.crate")
+TEST_EXISTING_CAMERA=$(sha256sum "dist/unofficial-osmo-camera-$version.crate")
 TEST_EXISTING_CAMERA=${TEST_EXISTING_CAMERA%% *}
-TEST_EXISTING_PLUGIN=$(sha256sum "dist/gst-plugin-osmo-$version.crate")
+TEST_EXISTING_PLUGIN=$(sha256sum "dist/gst-plugin-unofficial-osmo-$version.crate")
 TEST_EXISTING_PLUGIN=${TEST_EXISTING_PLUGIN%% *}
 bash "$scripts/publish-crates.sh" "$version"
 assert_calls ''
 TEST_EXISTING_PLUGIN=''
 bash "$scripts/publish-crates.sh" "$version"
-assert_calls $'package\ngst-plugin-osmo'
+assert_calls $'package\ngst-plugin-unofficial-osmo'
 TEST_EXISTING_CAMERA=''
-for name in osmo-camera gst-plugin-osmo; do
+for name in unofficial-osmo-camera gst-plugin-unofficial-osmo; do
     TEST_ALTER_ARCHIVE=$name
     assert_fails 'refusing to publish' bash "$scripts/publish-crates.sh" "$version"
     assert_calls package
@@ -127,14 +127,14 @@ TEST_PACKAGE_EXIT=1
 assert_fails 'Pre-publication packaging and verification failed' bash "$scripts/publish-crates.sh" "$version"
 assert_calls package
 TEST_PACKAGE_EXIT=0
-TEST_OMIT_ARCHIVE=osmo-camera
-rm -f "target/package/osmo-camera-$version.crate"
-assert_fails 'Packaging did not produce osmo-camera archive' bash "$scripts/publish-crates.sh" "$version"
+TEST_OMIT_ARCHIVE=unofficial-osmo-camera
+rm -f "target/package/unofficial-osmo-camera-$version.crate"
+assert_fails 'Packaging did not produce unofficial-osmo-camera archive' bash "$scripts/publish-crates.sh" "$version"
 assert_calls package
 TEST_OMIT_ARCHIVE=''
 TEST_PUBLISH_EXIT=1
-assert_fails 'Publishing osmo-camera failed' bash "$scripts/publish-crates.sh" "$version"
-assert_calls $'package\nosmo-camera'
+assert_fails 'Publishing unofficial-osmo-camera failed' bash "$scripts/publish-crates.sh" "$version"
+assert_calls $'package\nunofficial-osmo-camera'
 TEST_PUBLISH_EXIT=0
 TEST_HTTP_STATUS=403
 assert_fails 'failed with HTTP 403' bash "$scripts/publish-crates.sh" "$version"

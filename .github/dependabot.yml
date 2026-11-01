@@ -10,14 +10,14 @@ updates:
   - package-ecosystem: cargo
     directories:
       - /
-      - /python/osmo-camera
+      - /python/unofficial-osmo-camera
     schedule:
       interval: weekly
     groups:
       rust:
         patterns: ["*"]
   - package-ecosystem: uv
-    directory: /python/osmo-camera
+    directory: /python/unofficial-osmo-camera
     schedule:
       interval: weekly
     groups:

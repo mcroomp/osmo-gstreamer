@@ -504,13 +504,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "gst-plugin-osmo"
+name = "gst-plugin-unofficial-osmo"
 version = "0.1.0"
 dependencies = [
  "gstreamer",
  "gstreamer-base",
  "log",
- "osmo-camera",
+ "unofficial-osmo-camera",
 ]
 
 [[package]]
@@ -952,28 +952,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aca39cf52b03268400c16eeb9b56382ea3c3353409309b63f5c8f0b1faf42754"
 dependencies = [
  "pastey",
-]
-
-[[package]]
-name = "osmo-camera"
-version = "0.1.0"
-dependencies = [
- "btleplug",
- "env_logger",
- "futures",
- "log",
- "netlink-packet-route",
- "num_enum",
- "rpassword",
- "rtnetlink",
- "serde",
- "socket2",
- "tempfile",
- "thiserror",
- "tokio",
- "toml",
- "uuid",
- "windows",
 ]
 
 [[package]]
@@ -1456,6 +1434,28 @@ name = "unicode-ident"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
+
+[[package]]
+name = "unofficial-osmo-camera"
+version = "0.1.0"
+dependencies = [
+ "btleplug",
+ "env_logger",
+ "futures",
+ "log",
+ "netlink-packet-route",
+ "num_enum",
+ "rpassword",
+ "rtnetlink",
+ "serde",
+ "socket2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "toml",
+ "uuid",
+ "windows",
+]
 
 [[package]]
 name = "utf8parse"
