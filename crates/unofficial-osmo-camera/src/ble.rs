@@ -3,8 +3,8 @@
 //! Running the example authorizes camera pairing/wake. It is not an offline test.
 //!
 //! ```no_run
-//! use osmo_camera::ble::{BleConfig, BleQuery, BleSession};
-//! # fn main() -> osmo_camera::Result<()> {
+//! use unofficial_osmo_camera::ble::{BleConfig, BleQuery, BleSession};
+//! # fn main() -> unofficial_osmo_camera::Result<()> {
 //! let mut camera = BleSession::connect(BleConfig::new(None))?;
 //! camera.query(BleQuery::WifiCountry)?.require_success()?;
 //! let _identity = camera.pairing_identity();
@@ -1720,7 +1720,7 @@ mod tests {
         struct Logs(std::sync::Mutex<Vec<String>>);
         impl log::Log for Logs {
             fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
-                metadata.target().starts_with("osmo_camera::ble")
+                metadata.target().starts_with("unofficial_osmo_camera::ble")
             }
             fn log(&self, record: &log::Record<'_>) {
                 if self.enabled(record.metadata()) {

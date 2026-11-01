@@ -3,7 +3,7 @@ requires = ["maturin>=1.15,<2"]
 build-backend = "maturin"
 
 [project]
-name = "osmo-camera"
+name = "unofficial-osmo-camera"
 version = "0.1.0"
 description = "Unofficial Osmo interoperability library Python testing wrapper"
 requires-python = ">=3.10"

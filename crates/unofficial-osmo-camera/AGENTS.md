@@ -30,10 +30,10 @@ crate and its descendants.
 From the repository root:
 
 ```powershell
-cargo test --locked -p osmo-camera
-cargo test --locked -p osmo-camera --features ble
-cargo clippy --locked -p osmo-camera --all-targets -- -D warnings
-cargo clippy --locked -p osmo-camera --features ble --all-targets -- -D warnings
+cargo test --locked -p unofficial-osmo-camera
+cargo test --locked -p unofficial-osmo-camera --features ble
+cargo clippy --locked -p unofficial-osmo-camera --all-targets -- -D warnings
+cargo clippy --locked -p unofficial-osmo-camera --features ble --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 

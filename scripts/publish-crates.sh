@@ -12,7 +12,7 @@ if [[ ! ${CARGO_REGISTRY_TOKEN:-} =~ [^[:space:]] ]]; then
 fi
 response=$(mktemp)
 trap 'rm -f -- "$response"' EXIT
-names=(osmo-camera gst-plugin-osmo)
+names=(unofficial-osmo-camera gst-plugin-unofficial-osmo)
 checksums=()
 published=()
 for name in "${names[@]}"; do

@@ -103,7 +103,7 @@ pushd "%REPO_ROOT%"
 if errorlevel 1 exit /b 1
 
 echo Syncing the locked Python development environment...
-uv sync --locked --project python\osmo-camera
+uv sync --locked --project python\unofficial-osmo-camera
 if errorlevel 1 (
     popd
     exit /b 1

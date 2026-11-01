@@ -1,7 +1,7 @@
 [workspace]
-members = ["crates/osmo-camera", "crates/gst-plugin-osmo"]
-default-members = ["crates/osmo-camera"]
-exclude = ["python/osmo-camera"]
+members = ["crates/unofficial-osmo-camera", "crates/gst-plugin-unofficial-osmo"]
+default-members = ["crates/unofficial-osmo-camera"]
+exclude = ["python/unofficial-osmo-camera"]
 resolver = "2"
 
 [workspace.package]

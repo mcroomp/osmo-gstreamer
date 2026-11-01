@@ -4,12 +4,12 @@ use gst_base::{
     prelude::*,
     subclass::{base_src::CreateSuccess, prelude::*},
 };
-use osmo_camera::{CameraProfile, CameraSession, PreviewCancellation, PreviewReader};
 use std::{
     path::PathBuf,
     sync::{LazyLock, Mutex},
     time::{Duration, Instant},
 };
+use unofficial_osmo_camera::{CameraProfile, CameraSession, PreviewCancellation, PreviewReader};
 
 const FPS_NUMERATOR: i32 = 30000;
 const FPS_DENOMINATOR: i32 = 1001;
@@ -242,7 +242,9 @@ mod imp {
             let unit = match reader.receive() {
                 Ok(Some(unit)) => unit,
                 Ok(None) => return Err(gst::FlowError::Eos),
-                Err(osmo_camera::Error::Cancelled) => return Err(gst::FlowError::Flushing),
+                Err(unofficial_osmo_camera::Error::Cancelled) => {
+                    return Err(gst::FlowError::Flushing);
+                }
                 Err(error) => {
                     log::error!("GStreamer source could not read preview data: {error}");
                     gst::element_error!(self.obj(), gst::ResourceError::Read, ["{error}"]);
@@ -366,13 +368,13 @@ fn load_camera_profile(
     Ok(profile)
 }
 
-fn startup_error(error: osmo_camera::Error) -> gst::ErrorMessage {
+fn startup_error(error: unofficial_osmo_camera::Error) -> gst::ErrorMessage {
     log::error!("GStreamer camera source startup failed: {error}");
     match error {
-        osmo_camera::Error::InvalidConfig { .. } => {
+        unofficial_osmo_camera::Error::InvalidConfig { .. } => {
             gst::error_msg!(gst::ResourceError::Settings, ["{error}"])
         }
-        osmo_camera::Error::Ownership { .. } => {
+        unofficial_osmo_camera::Error::Ownership { .. } => {
             gst::error_msg!(gst::ResourceError::Busy, ["{error}"])
         }
         _ => gst::error_msg!(gst::ResourceError::OpenRead, ["{error}"]),
@@ -535,20 +537,20 @@ mod tests {
         let bus = pipeline.bus().unwrap();
         for (error, expected) in [
             (
-                osmo_camera::Error::InvalidConfig {
+                unofficial_osmo_camera::Error::InvalidConfig {
                     field: "allow-writes",
                     reason: "explicit approval required",
                 },
                 gst::ResourceError::Settings,
             ),
             (
-                osmo_camera::Error::Ownership {
+                unofficial_osmo_camera::Error::Ownership {
                     source: std::sync::Arc::new(std::io::ErrorKind::WouldBlock.into()),
                 },
                 gst::ResourceError::Busy,
             ),
             (
-                osmo_camera::Error::io(
+                unofficial_osmo_camera::Error::io(
                     "connect to the camera",
                     std::io::ErrorKind::ConnectionRefused.into(),
                 ),

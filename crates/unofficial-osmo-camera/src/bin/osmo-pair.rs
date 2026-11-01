@@ -3,17 +3,17 @@ mod neighbors;
 #[path = "osmo-pair/timing.rs"]
 mod timing;
 
-use osmo_camera::{
-    CameraConfig, CameraProfile, CameraSession, Error as CameraError,
-    ble::{BleConfig, BleSession, NetworkCleanup, WifiNetwork},
-    protocol::commands::{reply::CameraReadReply, wifi::cmd_07_0c_mac_get::WifiMacGet},
-};
 use std::{
     error::Error,
     fs,
     io::{self, Write},
     net::IpAddr,
     path::{Path, PathBuf},
+};
+use unofficial_osmo_camera::{
+    CameraConfig, CameraProfile, CameraSession, Error as CameraError,
+    ble::{BleConfig, BleSession, NetworkCleanup, WifiNetwork},
+    protocol::commands::{reply::CameraReadReply, wifi::cmd_07_0c_mac_get::WifiMacGet},
 };
 
 const CREDENTIALS_DIRECTORY: &str = ".credentials";
@@ -162,7 +162,10 @@ fn preview_diagnostic(
         log::info!("LAN-only diagnostic: no BLE initialization or Wi-Fi changes");
         return run(CameraSession::start_preview(camera_config(profile)?)?);
     }
-    let mut session = profile.start_preview(true, &osmo_camera::PreviewCancellation::default())?;
+    let mut session = profile.start_preview(
+        true,
+        &unofficial_osmo_camera::PreviewCancellation::default(),
+    )?;
     if let Err(error) = profile.save_to_file(path) {
         let primary = CameraError::io("save the initialized camera profile", error);
         return match session.close() {
