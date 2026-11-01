@@ -1,0 +1,10 @@
+/target/
+/python/osmo-camera/target/
+**/.venv/
+**/__pycache__/
+**/*.pyc
+**/*.pyd
+**/*.pdb
+/wheel-test/
+/dist/
+*.key

@@ -1,0 +1,17 @@
+[package]
+name = "gst-plugin-osmo"
+description = "Unofficial Osmo camera interoperability GStreamer source scaffold"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "gstosmo"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+osmo-camera = { path = "../osmo-camera" }
+gstreamer.workspace = true
+gstreamer-base.workspace = true

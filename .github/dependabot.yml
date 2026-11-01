@@ -1,0 +1,25 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: cargo
+    directories:
+      - /
+      - /python/osmo-camera
+    schedule:
+      interval: weekly
+    groups:
+      rust:
+        patterns: ["*"]
+  - package-ecosystem: uv
+    directory: /python/osmo-camera
+    schedule:
+      interval: weekly
+    groups:
+      python:
+        patterns: ["*"]
