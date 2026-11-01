@@ -1,4 +1,4 @@
-# osmo-gstreamer
+# osmo-gstreamer for DJI Osmo Nano
 
 Rust-first unofficial Osmo Nano integration, with a Python testing wrapper
 and a native GStreamer plugin. Licensed under [MIT](LICENSE).
