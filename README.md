@@ -303,4 +303,94 @@ to a local file when retaining diagnostics. Do not publish logs without review.
 CI pins uv 0.13.6. To intentionally refresh dependencies, run `cargo update`
 in each Cargo project and `uv lock --upgrade --project .\python\osmo-camera`,
 then run the checks above. Update the toolchain pin and its CI entries together.
-Publishing packages or creating a GitHub repository is not automated here.
+
+## Releases
+
+[Release automation](.github/workflows/release.yml) runs when an authorized
+maintainer pushes a `vX.Y.Z` tag. It publishes `osmo-camera` and
+`gst-plugin-osmo` to crates.io, then publishes a GitHub Release containing
+the two `.crate` source archives, checksums, and native archives for:
+
+- Windows x64 MSVC: `gstosmo.dll` and `osmo-pair.exe`.
+- Linux x64 and ARM64: `libgstosmo.so` and `osmo-pair`.
+- macOS Intel and Apple Silicon: `libgstosmo.dylib` and `osmo-pair`.
+
+Python wheels are not published by this workflow. Each native archive includes
+the plugin under `lib`, the pairing utility under `bin`, the MIT license, generated third-party notices,
+this guide, and `BUILD-INFO.txt` recording its build/runtime baseline.
+GStreamer, vendor software, credentials, recordings and debug symbols are not
+bundled. Native tests and plugin inspection are hardware-free; successful
+builds do not certify camera or firmware compatibility. macOS does not support
+the pairing utility's automatic neighbor-table lookup; set the camera IP
+manually as described above.
+
+### One-time maintainer setup
+
+1. Log in to [crates.io](https://crates.io), verify your account email, and
+   confirm that both crate names are available or owned by your account.
+2. Create an [API token](https://crates.io/settings/tokens) with the narrowest
+   permissions sufficient to create/publish these two crates and an appropriate
+   expiration. Add it as the GitHub Actions secret `CARGO_REGISTRY_TOKEN`,
+   in the repository's `CargoPublish` environment. Never commit or share
+   the token; revoke it immediately if exposed.
+3. Configure the GitHub Actions `CargoPublish` environment with required maintainer
+   approval and allow only release tags. Protect `v*` tags using a repository
+   ruleset so only authorized maintainers can create them.
+
+Build jobs have read-only repository permissions and no publishing token.
+The publishing job waits for every native build and source-package verification
+and, when configured, environment approval. Review the exact tagged changes,
+source archive listings, dependency notices, native dependencies, generated
+metadata and downloadable artifacts before approving. A tag alone is not a
+provenance or redistribution audit.
+
+### Cutting a release
+
+Update the workspace version in `Cargo.toml` and the plugin's exact
+`osmo-camera` dependency version in `crates/gst-plugin-osmo/Cargo.toml`.
+Refresh both Cargo lockfiles as needed and run the documented component checks.
+Keep both crate `LICENSE` copies identical to the root MIT license.
+The crates inherit author, homepage, repository and README metadata from the
+workspace; each declares its own docs.rs URL, keywords and categories.
+Release validation requires these fields and the MIT SPDX license declaration.
+The tag must match both crate versions and the plugin dependency exactly.
+Commit and push the reviewed changes, then, with maintainer approval:
+
+```powershell
+git tag -a v0.1.0 -m "Release 0.1.0"
+git push origin v0.1.0
+```
+
+Rust crates publish in dependency order. Publication is not transactional:
+if the second crate or GitHub upload fails, the first crate may already be
+public. Re-run the failed workflow after resolving the error. Already-published
+crate versions are accepted only if their checksum matches the source artifact;
+different contents require a new version/tag. Draft GitHub uploads can be retried,
+but published release assets are not overwritten.
+
+Run `pwsh -File .\scripts\test-release.ps1` to test tag validation, publishing
+order, retry checksums and missing-token failures with synthetic registry
+responses. These tests never upload crates or access camera hardware.
+
+### Installing native archives
+
+Install a GStreamer runtime matching the version recorded in `BUILD-INFO.txt`,
+or a separately validated compatible runtime, for the archive's architecture.
+Windows requires the MSVC distribution and any required MSVC runtime.
+Linux archives are built on Ubuntu 24.04 and require compatible glibc,
+GStreamer and D-Bus system libraries; they are not universal Linux binaries.
+macOS archives use Homebrew GStreamer and require compatible Homebrew library
+locations for their architecture.
+
+Extract the archive, make the runtime libraries available to the OS loader,
+and set `GST_PLUGIN_PATH` to its `lib` directory. On Windows, for example:
+
+```powershell
+$env:PATH = "$env:GSTREAMER_ROOT_X86_64\bin;$env:PATH"
+$env:GST_PLUGIN_PATH = (Resolve-Path .\osmo-gstreamer-0.1.0-x86_64-pc-windows-msvc\lib).Path
+gst-inspect-1.0 osmosrc
+```
+
+Inspection does not connect to hardware. Run the extracted pairing utility
+from your chosen working directory only when explicitly authorizing camera
+setup; profiles remain local under `.credentials`.

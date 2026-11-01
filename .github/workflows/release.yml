@@ -1,0 +1,217 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-publishing
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          toolchain: "1.99.1"
+      - id: version
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: ./scripts/validate-release.ps1 -Tag $env:RELEASE_TAG
+
+  native:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      RELEASE_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          toolchain: "1.99.1"
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-tools pkg-config
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        shell: bash
+        run: brew install gstreamer pkg-config
+      - name: Configure Windows SDK
+        if: runner.os == 'Windows'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # SHA256 from microsoft/winget-pkgs, gstreamerproject.gstreamer 1.28.8 x64.
+          $installer = Join-Path $env:RUNNER_TEMP 'gstreamer-1.28.8.exe'
+          Invoke-WebRequest 'https://gstreamer.freedesktop.org/data/pkg/windows/1.28.8/msvc/gstreamer-1.0-msvc-x86_64-1.28.8.exe' -OutFile $installer
+          if ((Get-FileHash $installer -Algorithm SHA256).Hash -ne 'E4C41EE6EE9C6C32A45D198463EC08D79BAC3BD5FA58ADC93D13FE4A08ABC9D9') {
+            throw 'GStreamer installer checksum mismatch.'
+          }
+          $env:GSTREAMER_ROOT_X86_64 = "$env:LOCALAPPDATA\Programs\gstreamer\1.0\msvc_x86_64"
+          $install = Start-Process $installer -ArgumentList "/CURRENTUSER /TYPE=devel /VERYSILENT /NORESTART /DIR=`"$env:GSTREAMER_ROOT_X86_64`"" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "GStreamer installer failed: $($install.ExitCode)" }
+          Remove-Item -LiteralPath $installer
+          $env:PATH = "$env:GSTREAMER_ROOT_X86_64\bin;$env:PATH"
+          ./scripts/setup-gstreamer.ps1
+          "PATH=$env:PATH" >> $env:GITHUB_ENV
+          "PKG_CONFIG=$env:PKG_CONFIG" >> $env:GITHUB_ENV
+          "PKG_CONFIG_PATH=$env:PKG_CONFIG_PATH" >> $env:GITHUB_ENV
+          "GSTREAMER_ROOT_X86_64=$env:GSTREAMER_ROOT_X86_64" >> $env:GITHUB_ENV
+      - name: Remap private build paths
+        run: |
+          "RUSTFLAGS=--remap-path-prefix=$env:GITHUB_WORKSPACE=/osmo-gstreamer --remap-path-prefix=$HOME=/build-home" >> $env:GITHUB_ENV
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --workspace --all-targets --all-features --target $env:RELEASE_TARGET -- -D warnings
+      - run: cargo test --locked --release --workspace --all-features --target $env:RELEASE_TARGET
+      - run: cargo build --locked --release --workspace --all-features --target $env:RELEASE_TARGET
+      - name: Generate dependency notices
+        run: |
+          cargo install cargo-about --version 0.9.3 --features cli --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Could not install the pinned notice generator.' }
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          cargo about generate --locked --workspace --all-features --fail scripts/licenses.hbs -o dist/THIRD-PARTY-LICENSES.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency notice generation failed; review licenses before release.' }
+      - name: Inspect native dependencies
+        run: |
+          if ($IsWindows) {
+            $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+            $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+            if ($LASTEXITCODE -ne 0 -or -not $vs) { throw 'Could not locate MSVC.' }
+            & $env:ComSpec /c "call `"$vs\Common7\Tools\VsDevCmd.bat`" -no_logo -arch=amd64 && dumpbin /dependents target\$env:RELEASE_TARGET\release\gstosmo.dll && dumpbin /dependents target\$env:RELEASE_TARGET\release\osmo-pair.exe"
+          } elseif ($IsMacOS) {
+            otool -L "target/$env:RELEASE_TARGET/release/libgstosmo.dylib" "target/$env:RELEASE_TARGET/release/osmo-pair"
+          } else {
+            $dependencies = ldd "target/$env:RELEASE_TARGET/release/libgstosmo.so" "target/$env:RELEASE_TARGET/release/osmo-pair"
+            Write-Host ($dependencies -join "`n")
+            if (($dependencies -join "`n") -match 'not found') { throw 'A native runtime dependency is missing.' }
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Native dependency inspection failed.' }
+      - run: ./scripts/package-native-release.ps1 -Version $env:RELEASE_VERSION -Target $env:RELEASE_TARGET
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-${{ matrix.target }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+          if-no-files-found: error
+
+  sources:
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          toolchain: "1.99.1"
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev pkg-config
+      - run: cargo package --locked --workspace --all-features
+      - name: Stage and inspect source archives
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          mkdir dist
+          for crate in osmo-camera gst-plugin-osmo; do
+            archive="target/package/$crate-$RELEASE_VERSION.crate"
+            tar -tzf "$archive"
+            cp "$archive" dist/
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rust-sources
+          path: dist/*.crate
+          if-no-files-found: error
+
+  publish:
+    needs: [validate, native, sources]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: CargoPublish
+    permissions:
+      contents: write
+    env:
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          toolchain: "1.99.1"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Install native dependencies for crate verification
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev pkg-config
+      - name: Publish Rust crates in dependency order
+        shell: pwsh
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: ./scripts/publish-crates.ps1 -Version $env:RELEASE_VERSION
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          sha256sum dist/* > dist/SHA256SUMS.txt
+          if gh release view "$RELEASE_TAG" --json isDraft > release-state.json; then
+            if [ "$(jq -r .isDraft release-state.json)" != true ]; then
+              echo "Release already published; refusing to overwrite assets." >&2
+              exit 1
+            fi
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" dist/* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false
