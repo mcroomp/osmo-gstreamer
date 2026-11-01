@@ -371,10 +371,16 @@ crate versions are accepted only if their checksum matches the source artifact;
 different contents require a new version/tag. Draft GitHub uploads can be retried,
 but published release assets are not overwritten.
 
-Run `pwsh -File .\scripts\test-release.ps1` to test tag validation, publishing
+Release automation uses Bash, with PowerShell reserved for Windows SDK setup,
+MSVC dependency inspection and ZIP packaging. The Bash release scripts use
+`jq`, `curl` and `sha256sum` on the Linux CI runners.
+
+Run `bash scripts/test-release.sh` from the repository root (Git Bash on
+Windows) to test tag validation, publishing
 order, retry checksums, packaging/upload failures and missing-token failures
 with synthetic registry responses. These tests never upload crates or access
-camera hardware.
+camera hardware. Linux and macOS archive layouts are also tested with synthetic
+binaries and plugin inspection.
 
 ### Installing native archives
 

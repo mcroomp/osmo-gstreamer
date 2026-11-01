@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory)]
     [string] $Version,
     [Parameter(Mandatory)]
-    [ValidateSet('x86_64-pc-windows-msvc', 'x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu', 'x86_64-apple-darwin', 'aarch64-apple-darwin')]
+    [ValidateSet('x86_64-pc-windows-msvc')]
     [string] $Target
 )
 
@@ -14,16 +14,8 @@ if (Test-Path $stage) {
 }
 New-Item -ItemType Directory -Path (Join-Path $stage 'lib'), (Join-Path $stage 'bin') -Force | Out-Null
 $build = Join-Path (Join-Path 'target' $Target) 'release'
-if ($Target -like '*windows*') {
-    $library = 'gstosmo.dll'
-    $executable = 'osmo-pair.exe'
-} elseif ($Target -like '*apple*') {
-    $library = 'libgstosmo.dylib'
-    $executable = 'osmo-pair'
-} else {
-    $library = 'libgstosmo.so'
-    $executable = 'osmo-pair'
-}
+$library = 'gstosmo.dll'
+$executable = 'osmo-pair.exe'
 Copy-Item (Join-Path $build $library) (Join-Path $stage 'lib')
 Copy-Item (Join-Path $build $executable) (Join-Path $stage 'bin')
 Copy-Item 'LICENSE', 'README.md' $stage
@@ -59,12 +51,5 @@ if ($LASTEXITCODE -ne 0) {
     'GStreamer and system libraries are not bundled. Use the recorded runtime version or a separately validated compatible runtime.'
     'Hardware compatibility is not certified. See README.md for authorization and model limitations.'
 ) | Set-Content (Join-Path $stage 'BUILD-INFO.txt') -Encoding utf8
-if ($Target -like '*windows*') {
-    Compress-Archive -Path $stage -DestinationPath (Join-Path 'dist' "$name.zip")
-} else {
-    & tar -czf (Join-Path 'dist' "$name.tar.gz") -C dist $name
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Could not archive the native release.'
-    }
-}
+Compress-Archive -Path $stage -DestinationPath (Join-Path 'dist' "$name.zip")
 Remove-Item -LiteralPath $env:GST_REGISTRY -ErrorAction Stop

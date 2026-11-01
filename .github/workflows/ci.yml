@@ -53,8 +53,8 @@ jobs:
       - run: uv run --project python/osmo-camera --no-sync ruff format --check python/osmo-camera
       - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
       - name: Test release validation and publishing guards offline
-        shell: pwsh
-        run: ./scripts/test-release.ps1
+        shell: bash
+        run: bash scripts/test-release.sh
 
   core:
     strategy:
