@@ -8,3 +8,4 @@
 /wheel-test/
 /dist/
 *.key
+/.credentials/
