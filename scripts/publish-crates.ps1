@@ -27,18 +27,28 @@ foreach ($name in @('osmo-camera', 'gst-plugin-osmo')) {
         $alreadyPublished[$name] = $true
     }
 }
+if ($alreadyPublished.Count -eq 2) {
+    return
+}
+# Rebuild with the same command as the audited source artifact; cargo package
+# writes to the documented target/package/<name>-<version>.crate location.
+& cargo package --locked --workspace --all-features
+if ($LASTEXITCODE -ne 0) {
+    throw 'Pre-publication packaging and verification failed.'
+}
+foreach ($name in @('osmo-camera', 'gst-plugin-osmo')) {
+    $audited = (Get-FileHash (Join-Path 'dist' "$name-$Version.crate") -Algorithm SHA256).Hash.ToLowerInvariant()
+    $rebuilt = Join-Path 'target' (Join-Path 'package' "$name-$Version.crate")
+    if (-not (Test-Path -LiteralPath $rebuilt -PathType Leaf)) {
+        throw "Packaging did not produce $name archive; refusing to publish."
+    }
+    if ((Get-FileHash $rebuilt -Algorithm SHA256).Hash.ToLowerInvariant() -ne $audited) {
+        throw "$name archive differs from the audited build artifact; refusing to publish."
+    }
+}
 foreach ($name in @('osmo-camera', 'gst-plugin-osmo')) {
     if ($alreadyPublished[$name]) {
         continue
-    }
-    $checksum = (Get-FileHash (Join-Path 'dist' "$name-$Version.crate") -Algorithm SHA256).Hash.ToLowerInvariant()
-    & cargo publish --dry-run --locked --registry crates-io -p $name --all-features
-    if ($LASTEXITCODE -ne 0) {
-        throw "Pre-publication verification of $name failed."
-    }
-    $publishedArchive = Join-Path 'target' (Join-Path 'package' "$name-$Version.crate")
-    if ((Get-FileHash $publishedArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $checksum) {
-        throw "$name archive differs from the audited build artifact; refusing to publish."
     }
     & cargo publish --locked --registry crates-io -p $name --all-features
     if ($LASTEXITCODE -ne 0) {

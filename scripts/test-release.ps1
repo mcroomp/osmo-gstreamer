@@ -38,7 +38,12 @@ try {
     $state = @{
         Existing = @{}
         Calls = [Collections.Generic.List[string]]::new()
+        PackageCalls = 0
         AlterArchive = $false
+        AlterArchiveName = 'osmo-camera'
+        OmitArchive = $false
+        PackageExitCode = 0
+        PublishExitCode = 0
     }
     foreach ($name in @('osmo-camera', 'gst-plugin-osmo')) {
         Set-Content (Join-Path 'dist' "$name-$version.crate") "synthetic archive for $name"
@@ -53,40 +58,84 @@ try {
         throw [Microsoft.PowerShell.Commands.HttpResponseException]::new('Synthetic 404', $response)
     }
     function cargo {
-        $name = $args[($args.IndexOf('-p') + 1)]
-        if ($args -contains '--dry-run') {
-            Copy-Item (Join-Path 'dist' "$name-$version.crate") (Join-Path 'target' (Join-Path 'package' "$name-$version.crate")) -Force
-            if ($state.AlterArchive) {
-                Add-Content (Join-Path 'target' (Join-Path 'package' "$name-$version.crate")) 'different contents'
+        if ($args[0] -eq 'package') {
+            if ($args -notcontains '--workspace' -or $args -notcontains '--locked' -or $args -notcontains '--all-features') {
+                throw 'Expected workspace packaging to match the audited source artifact.'
             }
+            $state.PackageCalls++
+            foreach ($name in @('osmo-camera', 'gst-plugin-osmo')) {
+                if ($state.OmitArchive -and $name -eq 'osmo-camera') {
+                    continue
+                }
+                $rebuilt = Join-Path 'target' (Join-Path 'package' "$name-$version.crate")
+                Copy-Item (Join-Path 'dist' "$name-$version.crate") $rebuilt -Force
+                if ($state.AlterArchive -and $name -eq $state.AlterArchiveName) {
+                    Add-Content $rebuilt 'different contents'
+                }
+            }
+            $global:LASTEXITCODE = $state.PackageExitCode
+        } elseif ($args[0] -eq 'publish' -and -not ($args -contains '--dry-run')) {
+            $state.Calls.Add($args[($args.IndexOf('-p') + 1)])
+            $global:LASTEXITCODE = $state.PublishExitCode
         } else {
-            $state.Calls.Add($name)
+            throw "Unexpected cargo invocation: $args"
         }
-        $global:LASTEXITCODE = 0
     }
 
     & $publish -Version $version
     if (($state.Calls -join ',') -ne 'osmo-camera,gst-plugin-osmo') {
         throw 'Crates were not published in dependency order.'
     }
+    if ($state.PackageCalls -ne 1) {
+        throw 'Both crates must be packaged and verified before publishing.'
+    }
     $state.Calls.Clear()
+    $state.PackageCalls = 0
     $state.Existing['gst-plugin-osmo'] = 'different-checksum'
     Assert-Fails { & $publish -Version $version } '*already exists with different contents*'
-    if ($state.Calls.Count -ne 0) {
+    if ($state.Calls.Count -ne 0 -or $state.PackageCalls -ne 0) {
         throw 'A crate was published before preflight rejected an existing version.'
     }
     foreach ($name in @('osmo-camera', 'gst-plugin-osmo')) {
         $state.Existing[$name] = (Get-FileHash (Join-Path 'dist' "$name-$version.crate") -Algorithm SHA256).Hash.ToLowerInvariant()
     }
     & $publish -Version $version
-    if ($state.Calls.Count -ne 0) {
+    if ($state.Calls.Count -ne 0 -or $state.PackageCalls -ne 0) {
         throw 'Matching existing crates should not be republished.'
     }
+    $state.Existing.Remove('gst-plugin-osmo')
+    & $publish -Version $version
+    if (($state.Calls -join ',') -ne 'gst-plugin-osmo' -or $state.PackageCalls -ne 1) {
+        throw 'A partial release must verify the workspace and publish only the missing crate.'
+    }
+    $state.Calls.Clear()
     $state.Existing.Clear()
     $state.AlterArchive = $true
-    Assert-Fails { & $publish -Version $version } '*refusing to publish*'
+    foreach ($name in @('osmo-camera', 'gst-plugin-osmo')) {
+        $state.AlterArchiveName = $name
+        Assert-Fails { & $publish -Version $version } '*refusing to publish*'
+        if ($state.Calls.Count -ne 0) {
+            throw 'A crate was published before both archive checksums matched.'
+        }
+    }
+    $state.AlterArchive = $false
+    $state.PackageExitCode = 1
+    Assert-Fails { & $publish -Version $version } 'Pre-publication packaging and verification failed.'
     if ($state.Calls.Count -ne 0) {
-        throw 'A changed source archive was published.'
+        throw 'A crate was published after packaging failed.'
+    }
+    $state.PackageExitCode = 0
+    $state.OmitArchive = $true
+    Remove-Item -LiteralPath (Join-Path 'target' (Join-Path 'package' "osmo-camera-$version.crate"))
+    Assert-Fails { & $publish -Version $version } 'Packaging did not produce osmo-camera archive*'
+    if ($state.Calls.Count -ne 0) {
+        throw 'A crate was published without a verified archive.'
+    }
+    $state.OmitArchive = $false
+    $state.PublishExitCode = 1
+    Assert-Fails { & $publish -Version $version } 'Publishing osmo-camera failed.*'
+    if (($state.Calls -join ',') -ne 'osmo-camera') {
+        throw 'Publication continued after an upload failed.'
     }
     Write-Host 'Release tests passed without registry uploads or hardware.'
 } finally {
