@@ -78,10 +78,27 @@ uv run --project .\python\osmo-camera --no-sync maturin build --locked --release
 ## GStreamer plugin
 
 Requires the GStreamer **runtime and development SDK**, version 1.24+.
-On Windows use matching x64 MSVC packages and ensure their `bin` directory is
-on `PATH`. Point `PKG_CONFIG_PATH` at the SDK's `lib\pkgconfig` directory and
-make `pkg-config` available. On Linux install the GStreamer and plugins-base
-development packages and `pkg-config`.
+On Windows, run `setup.cmd` from Command Prompt. It installs missing Rustup,
+uv and pkgconf tools with WinGet, ensures MSVC C++ Build Tools and the pinned
+Rust toolchain are available, calls the GStreamer setup script, and syncs the
+locked Python environment. GStreamer installs per-user through WinGet as an
+x64 MSVC development install. Some prerequisites may require elevation.
+
+```cmd
+setup.cmd
+```
+
+The default per-user install location is
+`%LOCALAPPDATA%\Programs\gstreamer\1.0\msvc_x86_64`. If GStreamer is already
+installed elsewhere, set `GSTREAMER_ROOT_X86_64` to that location before
+running setup. If development files are missing, the GStreamer script forces
+WinGet to rerun the pinned installer in development mode. WinGet verifies the
+installer against its package manifest. The batch file leaves the current
+Command Prompt configured; run it from an existing Command Prompt rather than
+double-clicking it. Setup is safe to rerun: installed tools and configured
+environment paths are reused.
+On Linux, install the GStreamer and plugins-base development packages and
+`pkg-config`.
 
 ```powershell
 cargo build --locked -p gst-plugin-osmo
