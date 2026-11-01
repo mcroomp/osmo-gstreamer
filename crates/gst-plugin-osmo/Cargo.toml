@@ -1,6 +1,6 @@
 [package]
 name = "gst-plugin-osmo"
-description = "Unofficial Osmo camera interoperability GStreamer source scaffold"
+description = "Unofficial Osmo Nano camera GStreamer source"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,6 +12,7 @@ name = "gstosmo"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-osmo-camera = { path = "../osmo-camera" }
+osmo-camera = { path = "../osmo-camera", features = ["ble"] }
 gstreamer.workspace = true
 gstreamer-base.workspace = true
+log.workspace = true

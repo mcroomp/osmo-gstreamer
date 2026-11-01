@@ -12,5 +12,6 @@ license = "MIT"
 repository = "https://github.com/mcroomp/osmo-gstreamer"
 
 [workspace.dependencies]
-gstreamer = { version = "0.25.4", features = ["v1_24"] }
+gstreamer = { version = "0.25.4", features = ["log", "v1_24"] }
 gstreamer-base = { version = "0.25.4", features = ["v1_24"] }
+log = "0.4"
