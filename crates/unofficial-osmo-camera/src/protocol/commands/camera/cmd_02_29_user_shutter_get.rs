@@ -14,7 +14,10 @@ const SHUTTER_DECIMAL_MAX: u8 = 9;
 const SHUTTER_RECIPROCAL_MASK: u16 = 0x8000;
 const SHUTTER_MAGNITUDE_MASK: u16 = 0x7fff;
 
-/// Interpreted shutter value from the external user-shutter layout.
+/// Legacy, model-specific interpretation of raw shutter codes.
+///
+/// The reciprocal bit, magnitude and seconds units are not established by
+/// the byte layout alone. Prefer the raw fields for interoperability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CameraShutterSpeed {
     Reciprocal {
@@ -35,14 +38,15 @@ pub enum CameraShutterSpeed {
 /// reply {
 ///     status: u8 | handled by CameraReadReply
 ///     unmapped_prefix: u8
-///     encoded_speed: le_u16 | bit 15 reciprocal; low 15 bits magnitude
-///     decimal_digit: u8
+///     encoded_speed: le_u16 | raw code; physical interpretation unspecified
+///     decimal_digit: u8 | raw fractional code
 ///     extension: [u8; remaining] | opaque
 /// }
 /// ```
 ///
 /// At least four accepted-body bytes are required. The prefix is not
-/// interpreted. Shutter interpretation is an external model-specific view;
+/// interpreted. The empty GET uses this four-data-byte layout, distinct from
+/// extended request variants. Shutter interpretation is a legacy compatibility view;
 /// the original fields and extension always round-trip unchanged.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CameraUserShutterData {
@@ -53,9 +57,10 @@ pub struct CameraUserShutterData {
 }
 
 impl CameraUserShutterData {
-    /// Interpret a valid reciprocal/direct shutter value without losing its wire form.
+    /// Apply the legacy reciprocal/direct interpretation without losing wire bytes.
     ///
     /// A zero magnitude or a decimal byte outside `0..=9` is left uninterpreted.
+    /// Returning a value does not independently confirm physical exposure time.
     pub fn speed(&self) -> Option<CameraShutterSpeed> {
         let magnitude = self.encoded_speed & SHUTTER_MAGNITUDE_MASK;
         if magnitude == 0 || self.decimal_digit > SHUTTER_DECIMAL_MAX {

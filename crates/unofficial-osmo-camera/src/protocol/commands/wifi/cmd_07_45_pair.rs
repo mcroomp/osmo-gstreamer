@@ -1,7 +1,7 @@
 //! Application pairing and raw BLE pairing-arm body.
 
 use crate::{
-    Result,
+    Error, Result,
     protocol::{WireDecode, WireEncode, WireReader, WireWriter, commands::reply::CameraRawData},
 };
 use num_enum::{FromPrimitive, IntoPrimitive};
@@ -12,12 +12,16 @@ pub const PAIRING_ID: u16 = 0x8092;
 const PAIRING_ARM_PREFIX: u8 = 1;
 const PAIRING_ARM_UNKNOWN: u8 = 0;
 const CLIENT_NAME: &str = "osmo";
+const MAX_PAIRING_IDENTITY_BYTES: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum PairingState {
+    /// State 1, accepted by the current pairing workflow.
     Approved = 1,
+    /// State 2; continue waiting rather than treating it as completion.
     AwaitingApproval = 2,
+    /// Other raw states, including 5/6; never treated as approval.
     #[num_enum(catch_all)]
     Unknown(u8),
 }
@@ -37,7 +41,9 @@ pub enum PairingState {
 ///         state: u8, extension: [u8; remaining] | opaque }
 /// ```
 ///
-/// Strings longer than 255 UTF-8 bytes are rejected before encoding.
+/// Nano pairing limits the identity to 32 encoded bytes; the client name is
+/// the library's fixed `osmo` label, not a requirement inferred for all peers.
+/// A state reply is distinct from a later decision notification or its receipt.
 pub struct PairingRequest<'a> {
     pub identity: &'a str,
 }
@@ -50,6 +56,12 @@ impl std::fmt::Debug for PairingRequest<'_> {
 
 impl WireEncode for PairingRequest<'_> {
     fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
+        if self.identity.len() > MAX_PAIRING_IDENTITY_BYTES {
+            return Err(Error::InvalidConfig {
+                field: "pairing identity",
+                reason: "must not exceed 32 UTF-8 bytes",
+            });
+        }
         write_packed_string(self.identity, writer)?;
         write_packed_string(CLIENT_NAME, writer)
     }
@@ -103,5 +115,32 @@ impl WireEncode for BlePairingArmRequest {
         writer.write_u8(PAIRING_ARM_PREFIX);
         writer.write_u8(PAIRING_ARM_UNKNOWN);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pairing_identity_limit_counts_encoded_bytes() {
+        for identity in ["x".repeat(32), "\u{00e9}".repeat(16)] {
+            let bytes = PairingRequest {
+                identity: &identity,
+            }
+            .encode()
+            .unwrap();
+            assert_eq!(bytes[0], 32);
+            assert_eq!(bytes.len(), 38);
+        }
+        for identity in ["x".repeat(33), "\u{00e9}".repeat(17)] {
+            assert!(
+                PairingRequest {
+                    identity: &identity
+                }
+                .encode()
+                .is_err()
+            );
+        }
     }
 }

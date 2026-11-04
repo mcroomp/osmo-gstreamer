@@ -21,6 +21,9 @@ const ROLE_GET_OPERATION: u8 = 0;
 /// reply { status: u8 | reject if nonzero
 ///         data: [u8; remaining] | opaque, not decoded as WifiRole }
 /// ```
+///
+/// The accepted-body layout and model support remain unspecified. In
+/// particular, do not interpret an arbitrary returned byte as `WifiRole`.
 #[derive(Clone, Copy, Debug)]
 pub struct WifiRoleGet;
 

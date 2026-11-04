@@ -16,7 +16,10 @@ const CAMERA_CONTENT_MODE_EXTENSION_OFFSET: usize =
 const CAMERA_CAPTURE_MODE_EXTENSION_OFFSET: usize =
     CAMERA_CAPTURE_MODE_OFFSET - CAMERA_STATE_PREFIX_LENGTH;
 
-/// Recording phase encoded in bits 6-7 of the first status byte.
+/// Legacy phase labels for the two-bit code in state bits 6..7.
+///
+/// The wire bit positions are established; the names do not prove every
+/// transition's physical recording state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CameraRecordingPhase {
     Idle,
@@ -25,10 +28,10 @@ pub enum CameraRecordingPhase {
     Finalizing,
 }
 
-/// External labels for the content-mode byte at payload offset 4.
+/// Compatibility labels for the content-mode byte at payload offset 4.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CameraContentMode {
-    /// Wire value 0; external sources use this for photo and timelapse.
+    /// Wire value 0; the combined label is a legacy interpretation.
     PhotoOrTimelapse,
     /// Wire value 1.
     Video,
@@ -49,7 +52,7 @@ impl From<u8> for CameraContentMode {
     }
 }
 
-/// Externally reported Nano capture-mode codes from payload offset 57.
+/// Legacy Nano capture-mode labels for raw payload offset 57.
 ///
 /// These codes label a model-qualified candidate view; they do not establish
 /// that any mode is available for a particular firmware or current state.
@@ -72,15 +75,19 @@ pub enum NanoCaptureMode {
 ///
 /// ```text
 /// notification {
-///     state: le_u32 | bit 30 indicates playback; bits 6-7 are recording phase
+///     state: le_u32 | bit 30 playback; bits 6-7 raw recording code
 ///     extension: [u8; remaining] | opaque
 /// }
 /// ```
 ///
-/// At least four bytes are required. When present, payload offset 4 has an
-/// external content-mode label and offset 57 an external Nano capture-mode
-/// label. Other status fields, including counters and elapsed-time width,
-/// remain uninterpreted. No query or notification reply is defined.
+/// At least four bytes are required by this prefix decoder. The full Nano
+/// layout is 60 bytes, with no leading command-status byte. It includes mode
+/// at offset 4, storage bytes at 5..=20, an opaque LE16 at 29, packed bytes at
+/// 32/33, eight opaque bytes at 49..=56 and a raw mode code at 57.
+/// State bit 30 can be set for content-mode code 2 or 7; code 7 remains
+/// unknown to the legacy content-mode enum and must not be discarded.
+/// Counters, elapsed-time units and capture-mode meanings remain unspecified.
+/// No query or notification reply is defined.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CameraStateNotification {
     pub state: u32,
@@ -101,7 +108,7 @@ impl CameraStateNotification {
         }
     }
 
-    /// Return the source-labelled content mode when payload offset 4 is present.
+    /// Apply compatibility labels when payload offset 4 is present.
     pub fn content_mode(&self) -> Option<CameraContentMode> {
         self.extension
             .0
@@ -189,5 +196,16 @@ mod tests {
             Some(NanoCaptureMode::Unknown(0xfe))
         );
         assert_eq!(value.encode().unwrap(), unknown);
+    }
+
+    #[test]
+    fn playback_flag_does_not_require_the_legacy_mode_two_label() {
+        let mut bytes = vec![0; 60];
+        bytes[..4].copy_from_slice(&PLAYBACK_STATE_MASK.to_le_bytes());
+        bytes[CAMERA_CONTENT_MODE_OFFSET] = 7;
+        let value = CameraStateNotification::decode(&bytes, &()).unwrap();
+        assert!(value.playback_mode_active());
+        assert_eq!(value.content_mode(), Some(CameraContentMode::Unknown(7)));
+        assert_eq!(value.encode().unwrap(), bytes);
     }
 }

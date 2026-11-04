@@ -5,7 +5,7 @@ use crate::protocol::{
     identity::{CameraCommand, Command},
 };
 
-/// Nano user-ISO labels from an external model-specific table.
+/// Legacy Nano user-ISO labels; numeric ISO meanings are not confirmed here.
 ///
 /// The wire code remains available from [`CameraIsoCode::code`]. These labels
 /// do not describe ISO-limit parameter `0x000F` or establish mode support.
@@ -25,7 +25,7 @@ pub enum NanoUserIso {
 }
 
 impl NanoUserIso {
-    /// Return the external table's numeric ISO value; Auto has no fixed value.
+    /// Return the legacy label's numeric ISO value; Auto has no fixed value.
     pub fn iso_value(self) -> Option<u32> {
         match self {
             Self::Auto => None,
@@ -50,11 +50,11 @@ camera_data!(
     ///
     /// ```text
     /// reply { status: u8 | handled by CameraReadReply
-    ///         code: u8 | raw code; see `nano_value` for model-specific labels
+    ///         code: u8 | unchanged raw code, not a physical ISO value
     ///         extension: [u8; remaining] | opaque }
     /// ```
     ///
-    /// The external Nano labels are a candidate interpretation only. Unknown
+    /// The legacy Nano labels are a candidate interpretation only. Unknown
     /// codes remain available through `code`, and aliases remain distinct there.
     CameraIsoCode,
     1
@@ -65,10 +65,10 @@ impl CameraIsoCode {
         self.raw_bytes()[0]
     }
 
-    /// Interpret codes with the external Nano mapping; the raw code is retained.
+    /// Apply the legacy Nano label mapping; the raw code is retained.
     ///
-    /// Codes `0x01` and `0x02` both map to ISO 100 in that source, while
-    /// `0x0D` maps to ISO 51200. Other models may assign different meanings.
+    /// Aliases are not evidence of physical sensitivity or supported settings.
+    /// Use `code` when those meanings have not been independently established.
     pub fn nano_value(&self) -> Option<NanoUserIso> {
         match self.code() {
             0x00 => Some(NanoUserIso::Auto),

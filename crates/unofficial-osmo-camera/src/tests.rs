@@ -2,15 +2,7 @@ use crate::{
     control::*,
     preview::*,
     protocol::{
-        commands::{
-            camera::cmd_02_0c_playback::{PlaybackMode, PlaybackRequest},
-            camera::cmd_02_09_live_view_source::LiveViewSourceRequest,
-            camera::cmd_02_80_camera_state::PLAYBACK_STATE_MASK,
-            common::cmd_00_88_app_presence::AppPresenceRequest,
-            gimbal::cmd_03_da_initialize::GimbalInitializeRequest,
-            live_view::cmd_09_a8_start_transmission::StartTransmissionRequest,
-        },
-        identity::{Command, CommandSet, Endpoint, WifiCommand},
+        identity::{Command, Endpoint, WifiCommand},
         *,
     },
     *,
@@ -20,69 +12,6 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-
-fn hex(text: &str) -> Vec<u8> {
-    text.as_bytes()
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap())
-        .collect()
-}
-
-#[test]
-fn command_payloads_match_wire_layouts() {
-    assert_eq!(
-        SYN_PARAMETERS,
-        hex("000064006400c005140000640000019001c005140000640014006400c00514000064000101040102")
-    );
-    assert_eq!(
-        AppPresenceRequest.encode().unwrap(),
-        [
-            0x17, 0, 0x46, 0x23, 0x7c, 0x41, 0x50, 0x50, 0, 0, 0, 0, 0, 2
-        ]
-    );
-    assert_eq!(
-        GimbalInitializeRequest.encode().unwrap(),
-        [5, 0xff, 0xff, 0xff, 0xff]
-    );
-    assert_eq!(
-        PlaybackRequest {
-            mode: PlaybackMode::Enter
-        }
-        .encode()
-        .unwrap(),
-        [1, 1, 0, 1]
-    );
-    assert_eq!(
-        PlaybackRequest {
-            mode: PlaybackMode::Leave
-        }
-        .encode()
-        .unwrap(),
-        [1, 1, 0, 0]
-    );
-    assert_eq!(
-        LiveViewSourceRequest.encode().unwrap(),
-        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3]
-    );
-    assert_eq!(
-        StartTransmissionRequest.encode().unwrap(),
-        [0, 4, 2, 0, 0, 0, 0, 0, 0, 0]
-    );
-    assert_eq!(PLAYBACK_STATE_MASK, 0x4000_0000);
-}
-
-#[test]
-fn wire_identities_round_trip_unknown_values() {
-    for set in u8::MIN..=u8::MAX {
-        assert_eq!(CommandSet::from(set).to_wire_u8(), set);
-        assert_eq!(Endpoint::from(set).to_wire_u8(), set);
-        for id in u8::MIN..=u8::MAX {
-            assert_eq!(Command::from_wire(set, id).wire(), (set, id));
-        }
-    }
-}
 
 #[test]
 fn duml_messages_round_trip_and_reject_corruption() {

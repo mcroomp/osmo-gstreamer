@@ -6,7 +6,7 @@ use crate::protocol::{
 };
 
 camera_data!(
-    /// Accepted language code; unknown numeric values are preserved.
+    /// Compatibility decoder for a one-byte language code; support is unconfirmed.
     ///
     /// Camera -> APP | 0x02/0x57 | Language reply
     ///
@@ -19,13 +19,16 @@ camera_data!(
 );
 
 impl CameraLanguageCode {
+    /// Signed view of the raw byte, without assigning a language or sentinel meaning.
     pub fn signed_code(&self) -> i8 {
         self.raw_bytes()[0] as i8
     }
 }
 
 camera_read_query!(
-    /// Read the camera-language code.
+    /// Request the camera-language code; a one-byte rejection needs no data body.
+    ///
+    /// An accepted language mapping and model support have not been established.
     ///
     /// APP -> Camera | 0x02/0x57
     ///

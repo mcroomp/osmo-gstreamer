@@ -63,3 +63,7 @@ tokio = { version = "1", features = ["test-util"] }
 name = "osmo-pair"
 path = "src/bin/osmo-pair.rs"
 required-features = ["ble"]
+
+[[example]]
+name = "preview-configs"
+required-features = ["ble"]

@@ -52,6 +52,8 @@ pub enum CameraCommand {
     Playback = 0x0c,
     State = 0x80,
     LiveViewSource = 0x09,
+    LiveViewQualitySet = 0x1a,
+    LiveViewOutputSet = 0x4c,
     Parameters = 0x8e,
     UserIso = 0x2b,
     UserShutter = 0x29,

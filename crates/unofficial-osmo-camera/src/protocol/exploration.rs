@@ -101,29 +101,25 @@ fn known_camera_read(command: Command, payload: &[u8]) -> bool {
             if payload == [0, 2, 0, 0, 1, 0] {
                 return true;
             }
-            payload.len() == 4
-                && payload[..2] == [0, 1]
-                && matches!(
-                    CameraParameter::from(u16::from_le_bytes([payload[2], payload[3]])),
+            if payload.len() != 4 || payload[..2] != [0, 1] {
+                return false;
+            }
+            let parameter = CameraParameter::from(u16::from_le_bytes([payload[2], payload[3]]));
+            parameter.nano_access().is_some_and(|access| access.can_read())
+                // Preserve legacy read approval without asserting Nano support.
+                || matches!(
+                    parameter,
                     CameraParameter::Beauty
-                        | CameraParameter::FpvControl
-                        | CameraParameter::PreviousMode
-                        | CameraParameter::Eis
-                        | CameraParameter::FieldOfView
-                        | CameraParameter::VoiceControl
-                        | CameraParameter::QuickModeSwitch
-                        | CameraParameter::VoiceLanguage
-                        | CameraParameter::IsoLimit
-                        | CameraParameter::Led
-                        | CameraParameter::ScreenSleep
-                        | CameraParameter::AutoOff
-                        | CameraParameter::Unknown0014
-                        | CameraParameter::SpotMetering
-                        | CameraParameter::CaptureMinimumInterval
-                        | CameraParameter::LoopDuration
-                        | CameraParameter::P2PShare
-                        | CameraParameter::SelfieFollowing
-                        | CameraParameter::VideoBeautify
+                    | CameraParameter::FpvControl
+                    | CameraParameter::PreviousMode
+                    | CameraParameter::QuickModeSwitch
+                    | CameraParameter::Led
+                    | CameraParameter::ScreenSleep
+                    | CameraParameter::AutoOff
+                    | CameraParameter::SpotMetering
+                    | CameraParameter::CaptureMinimumInterval
+                    | CameraParameter::P2PShare
+                    | CameraParameter::VideoBeautify
                 )
         }
         Command::Common(CommonCommand::ModuleVersion)

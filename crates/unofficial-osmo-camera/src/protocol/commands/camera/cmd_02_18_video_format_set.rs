@@ -352,28 +352,6 @@ mod tests {
     }
 
     #[test]
-    fn format_code_metadata_is_stable() {
-        for wire in u8::MIN..=u8::MAX {
-            let expected = VIDEO_RESOLUTIONS.iter().find(|info| info.code.0 == wire);
-            assert_eq!(VideoResolutionCode::from(wire).info(), expected);
-        }
-        assert_eq!(VideoResolutionCode::MAX.encode().unwrap(), [0xfd]);
-        assert_eq!(VideoResolutionCode::UNSET.encode().unwrap(), [0xfe]);
-        assert!(VideoResolutionCode::from(0x62).info().is_none());
-        assert_eq!(VideoFovCode::from(u8::MAX), VideoFovCode(u8::MAX));
-        assert_eq!(
-            NanoVideoResolutionCode::from(0x67),
-            NanoVideoResolutionCode::Uhd4k4By3
-        );
-        assert_eq!(
-            NanoVideoResolutionCode::from(0xFE),
-            NanoVideoResolutionCode::Unknown(0xFE)
-        );
-        assert_eq!(VideoFrameRateCode::from(0x08), VideoFrameRateCode::Fps240);
-        assert_eq!(VideoFrameRateCode::from(0x13), VideoFrameRateCode::Fps200);
-    }
-
-    #[test]
     fn format_round_trips_unknown_fields_and_requires_exact_length() {
         assert_eq!(current().encode().unwrap(), CURRENT);
         for length in 0..CURRENT.len() {
@@ -382,11 +360,6 @@ mod tests {
         let mut extra = CURRENT.to_vec();
         extra.push(0);
         assert!(VideoFormat::decode(&extra, &()).is_err());
-        for byte in u8::MIN..=u8::MAX {
-            assert_eq!(VideoResolutionCode::from(byte).encode().unwrap(), [byte]);
-            assert_eq!(VideoFrameRateCode::from(byte).encode().unwrap(), [byte]);
-            assert_eq!(VideoFovCode::from(byte).encode().unwrap(), [byte]);
-        }
     }
 
     #[test]

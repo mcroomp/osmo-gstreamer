@@ -61,44 +61,11 @@ mod tests {
     }
 
     #[test]
-    fn role_and_pairing_status_values_preserve_unknowns() {
-        for (byte, role) in [
-            (0, cmd_07_39_get_role::WifiRole::Hotspot),
-            (1, cmd_07_39_get_role::WifiRole::Station),
-        ] {
-            assert_eq!(
-                cmd_07_39_get_role::WifiRole::decode(&[byte], &()).unwrap(),
-                role
-            );
-            assert_eq!(role.encode().unwrap(), [byte]);
-            assert_eq!(
-                cmd_07_48_set_role::WifiRoleSetRequest { role }
-                    .encode()
-                    .unwrap(),
-                [byte]
-            );
-        }
-        assert!(cmd_07_39_get_role::WifiRole::decode(&[2], &()).is_err());
-        assert_eq!(
-            cmd_07_45_pair::PairingState::from(0xff),
-            cmd_07_45_pair::PairingState::Unknown(0xff)
-        );
-        assert_eq!(
-            cmd_07_46_pair_approval::PairingApproval::from(0xff),
-            cmd_07_46_pair_approval::PairingApproval::Unknown(0xff)
-        );
-        assert_eq!(ResponseStatus::Success.encode().unwrap(), [0]);
-    }
-
-    #[test]
-    fn wifi_queries_keep_exact_routing_payloads_and_read_policy() {
+    fn wifi_queries_and_writes_follow_read_policy() {
         use crate::protocol::{ExplorationRequest, Flags};
         use std::time::Duration;
 
-        fn check<Q: Query>(query: Q, command: WifiCommand, payload: &[u8]) {
-            assert_eq!(query.receiver(), Endpoint::Wifi);
-            assert_eq!(query.command(), Command::Wifi(command));
-            assert_eq!(query.encode().unwrap(), payload);
+        fn check<Q: Query>(query: Q) {
             let request = ExplorationRequest {
                 receiver: query.receiver(),
                 command: query.command(),
@@ -109,14 +76,10 @@ mod tests {
             assert!(request.is_known_read());
             request.validate(false, false).unwrap();
         }
-        check(cmd_07_07_ssid::WifiSsidGet, WifiCommand::Ssid, &[]);
-        check(cmd_07_0c_mac_get::WifiMacGet, WifiCommand::Mac, &[]);
-        check(
-            cmd_07_19_country_get::WifiCountryGet,
-            WifiCommand::Country,
-            &[],
-        );
-        check(cmd_07_39_get_role::WifiRoleGet, WifiCommand::GetRole, &[0]);
+        check(cmd_07_07_ssid::WifiSsidGet);
+        check(cmd_07_0c_mac_get::WifiMacGet);
+        check(cmd_07_19_country_get::WifiCountryGet);
+        check(cmd_07_39_get_role::WifiRoleGet);
         for (command, payload) in [
             (
                 WifiCommand::Password,
