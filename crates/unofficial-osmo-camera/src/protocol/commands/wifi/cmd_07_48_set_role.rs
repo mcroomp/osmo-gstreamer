@@ -14,6 +14,11 @@ use crate::{
 /// request { role: u8 | 0x00 hotspot, 0x01 station }
 /// reply { status: u8, extension: [u8; remaining] | opaque }
 /// ```
+///
+/// A hotspot success response can precede the actual transition. It confirms
+/// receipt, not that the radio changed mode; this request performs no readback
+/// of association or IP configuration. The compatibility encoder exposes only
+/// roles 0/1, not every possible device role.
 #[derive(Clone, Copy, Debug)]
 pub struct WifiRoleSetRequest {
     pub role: WifiRole,

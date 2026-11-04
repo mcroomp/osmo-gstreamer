@@ -1,10 +1,11 @@
 //! Wi-Fi network join payload.
 
 use crate::{
-    Result,
+    Error, Result,
     protocol::{WireEncode, WireWriter},
 };
 
+use super::cmd_07_07_ssid::MAX_SSID_BYTES;
 use super::packed_string::write_packed_string;
 
 /// Status and first opaque detail byte qualifying the bounded join retry.
@@ -26,10 +27,15 @@ pub const JOIN_RETRY_DETAIL: u8 = 0xff;
 /// reply { status: u8, extension: [u8; remaining] | opaque }
 /// ```
 ///
+/// The Nano request accepts 1..=32 encoded SSID bytes and either an empty
+/// password or 8..=63 encoded password bytes. Limits count bytes, not characters.
+/// Length prefixes do not include a terminating NUL.
+///
 /// Replies reuse `CameraReadReply<CameraRawData>`. A nonempty all-zero body
 /// indicates acceptance; status 0x01 followed by 0xFF qualifies a temporary
 /// refusal. Status-zero replies with nonzero trailing bytes are not accepted
-/// by the lifecycle. Other detail bytes remain uninterpreted.
+/// by the lifecycle. Other detail bytes remain uninterpreted. Acceptance is
+/// not proof of association, IP configuration or video readiness.
 pub struct JoinNetworkRequest<'a> {
     pub ssid: &'a str,
     pub password: &'a str,
@@ -43,7 +49,59 @@ impl std::fmt::Debug for JoinNetworkRequest<'_> {
 
 impl WireEncode for JoinNetworkRequest<'_> {
     fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
+        if self.ssid.is_empty() || self.ssid.len() > MAX_SSID_BYTES {
+            return Err(Error::InvalidConfig {
+                field: "Wi-Fi SSID",
+                reason: "must contain 1..=32 UTF-8 bytes",
+            });
+        }
+        if !self.password.is_empty() && !(8..=63).contains(&self.password.len()) {
+            return Err(Error::InvalidConfig {
+                field: "Wi-Fi password",
+                reason: "must be empty or contain 8..=63 UTF-8 bytes",
+            });
+        }
         write_packed_string(self.ssid, writer)?;
         write_packed_string(self.password, writer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn join_lengths_are_checked_before_writing_either_string() {
+        for ssid in ["x".to_owned(), "x".repeat(32), "\u{00e9}".repeat(16)] {
+            for password in ["".to_owned(), "p".repeat(8), "p".repeat(63)] {
+                let bytes = JoinNetworkRequest {
+                    ssid: &ssid,
+                    password: &password,
+                }
+                .encode()
+                .unwrap();
+                assert_eq!(usize::from(bytes[0]), ssid.len());
+                assert_eq!(usize::from(bytes[1 + ssid.len()]), password.len());
+                assert_eq!(bytes.len(), ssid.len() + password.len() + 2);
+            }
+        }
+        for (ssid, password) in [
+            ("".to_owned(), String::new()),
+            ("x".repeat(33), String::new()),
+            ("\u{00e9}".repeat(17), String::new()),
+            ("x".to_owned(), "p".repeat(7)),
+            ("x".to_owned(), "p".repeat(64)),
+        ] {
+            let mut writer = WireWriter::new();
+            assert!(
+                JoinNetworkRequest {
+                    ssid: &ssid,
+                    password: &password
+                }
+                .write_to(&mut writer)
+                .is_err()
+            );
+            assert!(writer.into_inner().is_empty());
+        }
     }
 }

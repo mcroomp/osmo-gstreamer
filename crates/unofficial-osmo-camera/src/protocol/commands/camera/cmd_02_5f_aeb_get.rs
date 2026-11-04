@@ -6,7 +6,7 @@ use crate::protocol::{
 };
 
 camera_data!(
-    /// Accepted bracketing codes without inferred enum meanings.
+    /// Two unchanged bracketing code bytes, without count/step or enum meanings.
     ///
     /// Camera -> APP | 0x02/0x5F | AEB reply
     ///

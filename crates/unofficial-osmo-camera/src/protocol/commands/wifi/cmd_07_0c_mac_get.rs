@@ -20,6 +20,9 @@ pub const MAC_ADDRESS_LENGTH: usize = 6;
 /// reply { status: u8 | reject if nonzero
 ///         address: [u8; 6] }
 /// ```
+///
+/// A failed read need not produce a reply; callers must retain bounded
+/// timeouts rather than inventing a zero address or treating silence as success.
 #[derive(Clone, Copy, Debug)]
 pub struct WifiMacGet;
 

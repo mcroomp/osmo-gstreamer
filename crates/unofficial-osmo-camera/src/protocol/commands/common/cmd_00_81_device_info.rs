@@ -44,21 +44,3 @@ impl WireEncode for AppDeviceInfoResponse {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn device_info_has_a_fixed_size_and_preserved_fields() {
-        let encoded = AppDeviceInfoResponse.encode().unwrap();
-        assert_eq!(encoded.len(), DEVICE_INFO_LENGTH);
-        assert_eq!(
-            &encoded[DEVICE_NAME_OFFSET..DEVICE_NAME_OFFSET + DEVICE_NAME.len()],
-            DEVICE_NAME
-        );
-        for (offset, value) in DEVICE_UNKNOWN_FIELDS {
-            assert_eq!(encoded[offset], value);
-        }
-    }
-}

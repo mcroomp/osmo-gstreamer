@@ -20,9 +20,14 @@ pub enum PlaybackMode {
 /// APP -> Camera | 0x02/0x0C
 ///
 /// ```text
-/// request { unknown: [0x01, 0x01, 0x00], mode: u8 | 0x01 enter, 0x00 leave }
+/// request { path: u8 = 1, operation: le_u16 = 1,
+///           mode_bits: u8 | bit 0: 0x01 enter, 0x00 leave }
 /// reply { status: u8, extension: [u8; remaining] | opaque }
 /// ```
+///
+/// The encoder emits exactly four bytes. A zero status acknowledges the mode
+/// request, not completion of every ancillary storage/transfer operation.
+/// Preview setup separately waits for the playback state notification.
 #[derive(Clone, Copy, Debug)]
 pub struct PlaybackRequest {
     pub mode: PlaybackMode,

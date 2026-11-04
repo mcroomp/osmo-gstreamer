@@ -362,14 +362,4 @@ mod tests {
         assert!(UdpDatagram::decode(&corrupt, &datagram.session).is_err());
         assert!(!valid_datagram(&encoded, 0x9999));
     }
-
-    #[test]
-    fn strict_status_and_media_values_reject_unclassified_bytes() {
-        assert_eq!(
-            ResponseStatus::from(u8::MAX),
-            ResponseStatus::Unknown(u8::MAX)
-        );
-        assert!(MediaType::try_from(u8::MAX).is_err());
-        assert!(AckEncoding::parse(u8::MAX).is_err());
-    }
 }

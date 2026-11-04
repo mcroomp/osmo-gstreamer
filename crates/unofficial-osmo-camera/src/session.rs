@@ -81,10 +81,16 @@ impl CameraConfig {
 
 pub struct CameraSession {
     reader: PreviewReader,
+    commands: mpsc::SyncSender<PreviewRequest>,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<Result<()>>>,
     #[cfg(feature = "ble")]
     pub(crate) ble_owner: Option<crate::ble::BleSession>,
+}
+
+struct PreviewRequest {
+    request: ExplorationRequest,
+    response: mpsc::SyncSender<Result<Message>>,
 }
 
 /// LAN control owner. Connection pairs, registers APP presence and checks a
@@ -372,6 +378,7 @@ impl CameraSession {
         let reader = PreviewReader::default();
         let stop = cancellation.stop.clone();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let (commands, requests) = mpsc::sync_channel(1);
         let worker_reader = reader.clone();
         let worker_stop = stop.clone();
         let worker = thread::Builder::new()
@@ -381,7 +388,14 @@ impl CameraSession {
                     reader: worker_reader.clone(),
                     finished: false,
                 };
-                let result = run(config, worker_stop, worker_reader.clone(), ready_tx, lease);
+                let result = run(
+                    config,
+                    worker_stop,
+                    worker_reader.clone(),
+                    ready_tx,
+                    lease,
+                    requests,
+                );
                 worker_reader.finish(result.clone());
                 completion.finished = true;
                 result
@@ -389,6 +403,7 @@ impl CameraSession {
             .map_err(|error| Error::io("spawn the camera I/O worker", error))?;
         let mut session = Self {
             reader,
+            commands,
             stop,
             worker: Some(worker),
             #[cfg(feature = "ble")]
@@ -422,6 +437,33 @@ impl CameraSession {
     pub fn reader(&self) -> PreviewReader {
         self.reader.clone()
     }
+
+    /// Execute an explicitly approved raw request on the existing preview owner.
+    ///
+    /// Unclassified requests require both approvals, as on [`ControlSession`].
+    /// The caller must keep draining the preview reader during the exchange.
+    /// A transport failure or reply timeout terminates the session; no retry or
+    /// reconnect is added. A reply is returned without assuming its payload layout.
+    pub fn request_raw(
+        &mut self,
+        request: ExplorationRequest,
+        session_approved: bool,
+        request_approved: bool,
+    ) -> Result<Message> {
+        request.validate(session_approved, request_approved)?;
+        if self.stop.load(Ordering::Acquire) {
+            return Err(Error::Cancelled);
+        }
+        if self.worker.as_ref().is_none_or(JoinHandle::is_finished) {
+            return Err(Error::WorkerTerminated);
+        }
+        let (response, result) = mpsc::sync_channel(1);
+        self.commands
+            .try_send(PreviewRequest { request, response })
+            .map_err(|_| Error::WorkerTerminated)?;
+        result.recv().map_err(|_| Error::WorkerTerminated)?
+    }
+
     pub fn close(&mut self) -> Result<()> {
         self.stop.store(true, Ordering::Release);
         self.reader.set_flushing(true);
@@ -497,6 +539,7 @@ fn run(
     reader: PreviewReader,
     ready: mpsc::SyncSender<Result<()>>,
     lease: Option<Arc<CameraOwnerLease>>,
+    requests: mpsc::Receiver<PreviewRequest>,
 ) -> Result<()> {
     let mut link = match Link::open(&config, stop, reader, lease) {
         Ok(link) => link,
@@ -512,7 +555,7 @@ fn run(
             if ready.send(Ok(())).is_err() {
                 Err(Error::Cancelled)
             } else {
-                link.stream()
+                link.stream(requests)
             }
         }
         Err(error) => {
@@ -1124,8 +1167,20 @@ impl Link {
         }
         Ok(())
     }
-    fn stream(&mut self) -> Result<()> {
+    fn stream(&mut self, requests: mpsc::Receiver<PreviewRequest>) -> Result<()> {
         loop {
+            match requests.try_recv() {
+                Ok(PreviewRequest { request, response }) => {
+                    let result = self.exchange_request(request);
+                    let failure = result.as_ref().err().cloned();
+                    response.send(result).map_err(|_| Error::Cancelled)?;
+                    if let Some(error) = failure {
+                        return Err(error);
+                    }
+                }
+                Err(mpsc::TryRecvError::Disconnected) => return Err(Error::Cancelled),
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
             self.pump(IO_POLL)?;
             self.ack()?;
             if self.last_presence.elapsed() >= PRESENCE_INTERVAL && self.sender.can_send() {
@@ -1192,6 +1247,48 @@ impl Link {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_raw_requests_require_both_approvals_before_queueing() {
+        let (commands, requests) = mpsc::sync_channel(1);
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = stop.clone();
+        let worker = thread::spawn(move || {
+            while !worker_stop.load(Ordering::Acquire) {
+                thread::sleep(Duration::from_millis(1));
+            }
+            Ok(())
+        });
+        let mut session = CameraSession {
+            reader: PreviewReader::default(),
+            commands,
+            stop,
+            worker: Some(worker),
+            #[cfg(feature = "ble")]
+            ble_owner: None,
+        };
+        let request = ExplorationRequest {
+            receiver: Endpoint::Camera,
+            command: Command::Camera(CameraCommand::LiveViewQualitySet),
+            flags: Flags::REQUEST,
+            payload: vec![0],
+            timeout: Duration::from_secs(1),
+        };
+        for (session_approved, request_approved) in [(false, false), (true, false), (false, true)] {
+            assert!(matches!(
+                session.request_raw(request.clone(), session_approved, request_approved),
+                Err(Error::InvalidConfig {
+                    field: "unclassified request",
+                    ..
+                })
+            ));
+            assert!(matches!(
+                requests.try_recv(),
+                Err(mpsc::TryRecvError::Empty)
+            ));
+        }
+        session.close().unwrap();
+    }
 
     #[test]
     fn unexpected_worker_exit_wakes_consumers() {

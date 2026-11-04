@@ -113,7 +113,7 @@ macro_rules! camera_read_query {
 pub(crate) use camera_read_query;
 
 macro_rules! camera_data {
-    ($(#[$meta:meta])* $name:ident, $minimum:literal) => {
+    ($(#[$meta:meta])* $name:ident, $minimum:expr) => {
         $(#[$meta])*
         #[derive(Clone, Debug, PartialEq, Eq)]
         pub struct $name {

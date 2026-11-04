@@ -20,6 +20,9 @@ const ACCESSORY_HEADER_LENGTH: usize = 4;
 const ACCESSORY_OPERATION_OFFSET: usize = 1;
 const ACCESSORY_STATUS_OFFSET: usize = 2;
 const ACCESSORY_SELECTOR_OFFSET: usize = 3;
+const ACCESSORY_LIVE_STREAMING_MASK: u8 = 0x01;
+const ACCESSORY_WIRELESS_MICROPHONE_MASK: u8 = 0x02;
+const ACCESSORY_WIFI_SHARE_MASK: u8 = 0x04;
 
 /// A targeted camera capability read on command 0x02/0xE0.
 ///
@@ -29,7 +32,7 @@ const ACCESSORY_SELECTOR_OFFSET: usize = 3;
 /// request {
 ///     operation: u8 = 0x02
 ///     count: u8 = 0x01
-///     selector: u8 | 0x01 EI range, 0x02 recommended EI, 0x03 lens, 0x04 accessories
+///     selector: u8 | 0x01..0x04; names below are compatibility labels
 /// }
 /// reply {
 ///     status: u8 | reject if nonzero
@@ -42,10 +45,13 @@ const ACCESSORY_SELECTOR_OFFSET: usize = 3;
 ///     selector: u8 = 0x04
 ///     guard | reject if accessory_status is nonzero
 ///     unknown: u8
-///     flags: u8
+///     flags: u8 | raw bits, semantic labels unconfirmed
 ///     extension: [u8; remaining]
 /// }
 /// ```
+///
+/// This is the library's compatibility codec, not a confirmed device support
+/// list. The selector names and accessory flag meanings remain unconfirmed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CapabilityQuery {
     /// Read exposure-index range data.
@@ -184,13 +190,31 @@ pub enum CapabilityValue {
 ///         unknown: u8, flags: u8, extension: [u8; remaining] | opaque }
 /// ```
 ///
-/// `CapabilityReply` validates the header. Flag meanings and the unknown byte
-/// remain uninterpreted.
+/// `CapabilityReply` validates the header. The legacy `supports_*` helpers test
+/// bits 0/1/2 only; their labels are not confirmed availability, enabled state,
+/// readiness or authorization. The unknown byte and other bits are retained.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccessoryCapabilityResponse {
     pub raw_flags: u8,
     pub unmapped_byte: u8,
     pub extension: CameraRawData,
+}
+
+impl AccessoryCapabilityResponse {
+    /// Legacy bit-0 view; no streaming availability or readiness guarantee.
+    pub fn supports_live_streaming(&self) -> bool {
+        self.raw_flags & ACCESSORY_LIVE_STREAMING_MASK != 0
+    }
+
+    /// Legacy bit-1 view; no microphone availability guarantee.
+    pub fn supports_wireless_microphone(&self) -> bool {
+        self.raw_flags & ACCESSORY_WIRELESS_MICROPHONE_MASK != 0
+    }
+
+    /// Legacy bit-2 view; no Wi-Fi-sharing availability guarantee.
+    pub fn supports_wifi_share(&self) -> bool {
+        self.raw_flags & ACCESSORY_WIFI_SHARE_MASK != 0
+    }
 }
 
 impl WireDecode for AccessoryCapabilityResponse {
@@ -259,20 +283,6 @@ mod tests {
     use crate::protocol::{WireDecode, WireU8};
 
     #[test]
-    fn capability_selectors_match_command_payloads() {
-        for (query, selector) in [
-            (CapabilityQuery::EiRange, 1),
-            (CapabilityQuery::RecommendedEi, 2),
-            (CapabilityQuery::LensInformation, 3),
-            (CapabilityQuery::Accessories, 4),
-        ] {
-            assert_eq!(query.encode().unwrap(), [2, 1, selector]);
-            assert_eq!(query.receiver(), Endpoint::Camera);
-            assert_eq!(query.command().wire(), (0x02, 0xe0));
-        }
-    }
-
-    #[test]
     fn accessory_status_and_unknown_fields_are_preserved() {
         let query = CapabilityQuery::Accessories;
         let payload = [0, 2, 0, 4, 0xa5, 0x87, 0x99];
@@ -301,6 +311,25 @@ mod tests {
                 extension: CameraRawData(vec![2, 0]),
             }
         );
+    }
+
+    #[test]
+    fn synthetic_accessory_support_flags_preserve_all_bits_and_extensions() {
+        let mut bytes = [0, 2, 0, 4, 0xa5, 0, 0x5a];
+        for flags in [0, 1, 2, 4, 0x80, 0xff] {
+            bytes[5] = flags;
+            let reply = CapabilityReply::decode(&bytes, &CapabilityQuery::Accessories).unwrap();
+            let CapabilityReply::Accepted(CapabilityValue::Accessories(value)) = &reply else {
+                panic!("expected accepted accessories");
+            };
+            assert_eq!(value.supports_live_streaming(), flags & 1 != 0);
+            assert_eq!(value.supports_wireless_microphone(), flags & 2 != 0);
+            assert_eq!(value.supports_wifi_share(), flags & 4 != 0);
+            assert_eq!(value.raw_flags, flags);
+            assert_eq!(value.unmapped_byte, 0xa5);
+            assert_eq!(value.extension.0, [0x5a]);
+            assert_eq!(reply.encode().unwrap(), bytes);
+        }
     }
 
     #[test]

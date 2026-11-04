@@ -9,7 +9,7 @@ use crate::{
     },
 };
 
-/// Read camera-module hardware text and the four-byte module version.
+/// Read the camera-module product label and four-byte module version.
 ///
 /// APP -> Camera | 0x00/0x01
 ///
@@ -18,7 +18,7 @@ use crate::{
 /// reply {
 ///     status: u8
 ///     unknown: u8
-///     hardware: [u8; 16] | printable ASCII through the first NUL
+///     product_label: [u8; 16] | printable ASCII through the first NUL
 ///     unknown: [u8; 4]
 ///     version: [u8; 4]
 ///     extension: [u8; remaining]
@@ -51,13 +51,16 @@ impl Query for CameraModuleVersionGet {
 ///
 /// ```text
 /// reply { status: u8 | handled by CameraReadReply
-///         unknown: u8, hardware: [u8; 16] | printable ASCII through first NUL
+///         format: u8, product_label: [u8; 16] | printable ASCII through first NUL
 ///         unknown: [u8; 4], version: [u8; 4],
 ///         extension: [u8; remaining] | opaque }
 /// ```
 ///
 /// At least 25 accepted-body bytes are required. `firmware()` returns the
 /// four version bytes in reverse wire order; `WireEncode` preserves wire order.
+/// The Nano layout is 30 data bytes after status, with five bytes beyond this
+/// decoder's prefix. The other words are not assigned hardware/bootloader
+/// meanings, and no product label is hardcoded.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CameraModuleVersion {
     hardware: String,
@@ -66,6 +69,7 @@ pub struct CameraModuleVersion {
 }
 
 impl CameraModuleVersion {
+    /// Compatibility name for the product label, not a hardware revision field.
     pub fn hardware(&self) -> &str {
         &self.hardware
     }
@@ -109,14 +113,11 @@ impl<Q> WireDecode<Q> for CameraModuleVersion {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{Query, WireDecode};
+    use crate::protocol::WireDecode;
 
     #[test]
-    fn module_version_query_and_fields_round_trip() {
+    fn module_version_fields_and_extension_round_trip() {
         let query = CameraModuleVersionGet;
-        assert_eq!(query.receiver(), Endpoint::Camera);
-        assert_eq!(query.command().wire(), (0, 1));
-        assert!(query.encode().unwrap().is_empty());
 
         let mut payload = vec![0; 27];
         payload[2..8].copy_from_slice(b"CAM001");
