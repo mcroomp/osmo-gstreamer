@@ -61,11 +61,16 @@ questions; no new automatic requests or writes are introduced.
 ## Python testing wrapper
 
 Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/).
+The uv workspace shares one `.venv` and `uv.lock` at the repository root,
+including when commands target the Python package in its subdirectory.
+Select `.venv\Scripts\python.exe` in VS Code on Windows (`.venv/bin/python`
+on Linux/macOS). An older nested `.venv` is no longer used; do not move it,
+because virtual environments contain location-specific paths.
 GStreamer is not required. uv uses the default `microsoft-python` package index
 at `https://packagefeedproxy.microsoft.io/pypi/simple/`.
 
 ```powershell
-uv sync --locked --project .\python\unofficial-osmo-camera
+uv sync --locked
 uv run --project .\python\unofficial-osmo-camera --no-sync maturin develop --locked --manifest-path .\python\unofficial-osmo-camera\Cargo.toml
 uv run --project .\python\unofficial-osmo-camera --no-sync python -m unittest discover -s .\python\unofficial-osmo-camera\tests
 uv run --project .\python\unofficial-osmo-camera --no-sync ruff check .\python\unofficial-osmo-camera
@@ -85,11 +90,17 @@ uv run --project .\python\unofficial-osmo-camera --no-sync maturin build --locke
 Requires the GStreamer **runtime and development SDK**, version 1.24+.
 On Windows, run `setup.cmd` from an existing Command Prompt. It installs
 missing build tools and the GStreamer SDK, configures the current shell, and
-syncs the locked Python environment. Some prerequisites may require elevation.
+syncs the locked Python environment. Some prerequisites, including pkgconf's
+machine-wide installer, may prompt for administrator approval. Setup stops if
+an installer fails or is cancelled; approve the required installation and rerun
+setup to continue.
 
 ```cmd
 setup.cmd
 ```
+
+The Windows setup regression tests run without installing software or accessing
+hardware: `powershell -NoProfile -File .\scripts\test-setup.ps1`.
 
 The default per-user install location is
 `%LOCALAPPDATA%\Programs\gstreamer\1.0\msvc_x86_64`. If GStreamer is already

@@ -15,7 +15,8 @@ project and its descendants.
 
 ## Environment
 
-- Use uv and this project's `.venv`, not another project's interpreter environment.
+- Use uv and the repository-root `.venv`, shared by the uv workspace.
+  Keep the shared `uv.lock` and development dependencies at the repository root.
   The default `microsoft-python` index is
   `https://packagefeedproxy.microsoft.io/pypi/simple/`.
   It is a package feed, not a distinct Python interpreter distribution.

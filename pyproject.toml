@@ -1,0 +1,10 @@
+[tool.uv.workspace]
+members = ["python/unofficial-osmo-camera"]
+
+[dependency-groups]
+dev = ["maturin>=1.15,<2", "ruff>=0.17.3,<0.18"]
+
+[[tool.uv.index]]
+name = "microsoft-python"
+url = "https://packagefeedproxy.microsoft.io/pypi/simple/"
+default = true
