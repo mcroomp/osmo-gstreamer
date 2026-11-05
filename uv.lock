@@ -2,6 +2,17 @@ version = 1
 revision = 3
 requires-python = ">=3.10"
 
+[manifest]
+members = [
+    "unofficial-osmo-camera",
+]
+
+[manifest.dependency-groups]
+dev = [
+    { name = "maturin", specifier = ">=1.15,<2" },
+    { name = "ruff", specifier = ">=0.17.3,<0.18" },
+]
+
 [[package]]
 name = "maturin"
 version = "1.15.0"
@@ -126,18 +137,4 @@ wheels = [
 [[package]]
 name = "unofficial-osmo-camera"
 version = "0.2.0"
-source = { editable = "." }
-
-[package.dev-dependencies]
-dev = [
-    { name = "maturin" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "maturin", specifier = ">=1.15,<2" },
-    { name = "ruff", specifier = ">=0.17.3,<0.18" },
-]
+source = { editable = "python/unofficial-osmo-camera" }

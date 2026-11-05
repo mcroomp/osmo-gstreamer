@@ -38,7 +38,7 @@ jobs:
           version: ${{ env.UV_VERSION }}
           python-version: "3.15"
           enable-cache: true
-          cache-dependency-glob: python/unofficial-osmo-camera/uv.lock
+          cache-dependency-glob: uv.lock
       - name: Install GStreamer development libraries
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev pkg-config
       - run: cargo fmt --all -- --check
@@ -48,7 +48,7 @@ jobs:
       - run: cargo doc --locked --workspace --all-features --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
-      - run: uv sync --locked --project python/unofficial-osmo-camera
+      - run: uv sync --locked
       - run: uv run --project python/unofficial-osmo-camera --no-sync ruff check python/unofficial-osmo-camera
       - run: uv run --project python/unofficial-osmo-camera --no-sync ruff format --check python/unofficial-osmo-camera
       - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
@@ -130,8 +130,8 @@ jobs:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ matrix.python }}
           enable-cache: true
-          cache-dependency-glob: python/unofficial-osmo-camera/uv.lock
-      - run: uv sync --locked --project python/unofficial-osmo-camera
+          cache-dependency-glob: uv.lock
+      - run: uv sync --locked
       - run: uv run --project python/unofficial-osmo-camera --no-sync maturin develop --locked --manifest-path python/unofficial-osmo-camera/Cargo.toml
       - run: uv run --project python/unofficial-osmo-camera --no-sync python -m unittest discover -s python/unofficial-osmo-camera/tests
       - run: uv run --project python/unofficial-osmo-camera --no-sync maturin build --locked --release --sdist --manifest-path python/unofficial-osmo-camera/Cargo.toml --out dist

@@ -3,6 +3,7 @@
 set "REPO_ROOT=%~dp0"
 call :AddPath "%USERPROFILE%\.cargo\bin"
 call :AddPath "%LOCALAPPDATA%\Microsoft\WinGet\Links"
+call :AddInstalledPaths
 
 where winget >nul 2>nul
 if errorlevel 1 (
@@ -13,8 +14,7 @@ if errorlevel 1 (
 where rustup >nul 2>nul
 if errorlevel 1 (
     echo Installing Rustup...
-    winget install --exact --id Rustlang.Rustup --scope user --accept-package-agreements --accept-source-agreements
-    if errorlevel 1 exit /b 1
+    winget install --exact --id Rustlang.Rustup --scope user --accept-package-agreements --accept-source-agreements || exit /b 1
     call :AddPath "%USERPROFILE%\.cargo\bin"
     call :AddPath "%LOCALAPPDATA%\Microsoft\WinGet\Links"
 )
@@ -22,9 +22,9 @@ if errorlevel 1 (
 where uv >nul 2>nul
 if errorlevel 1 (
     echo Installing uv...
-    winget install --exact --id astral-sh.uv --scope user --accept-package-agreements --accept-source-agreements
-    if errorlevel 1 exit /b 1
+    winget install --exact --id astral-sh.uv --scope user --accept-package-agreements --accept-source-agreements || exit /b 1
     call :AddPath "%LOCALAPPDATA%\Microsoft\WinGet\Links"
+    call :AddInstalledPaths
 )
 
 where pkg-config >nul 2>nul
@@ -33,9 +33,9 @@ if errorlevel 1 (
     where pkgconf >nul 2>nul
     if errorlevel 1 (
         echo Installing pkgconf...
-        winget install --exact --id pkgconf.pkgconf --scope user --accept-package-agreements --accept-source-agreements
-        if errorlevel 1 exit /b 1
+        winget install --exact --id pkgconf.pkgconf --accept-package-agreements --accept-source-agreements || exit /b 1
         call :AddPath "%LOCALAPPDATA%\Microsoft\WinGet\Links"
+        call :AddInstalledPaths
         where pkgconf >nul 2>nul
         if errorlevel 1 (
             echo ERROR: pkgconf installed, but neither pkg-config nor pkgconf is available on PATH.
@@ -48,15 +48,14 @@ if errorlevel 1 (
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 set "VS_ROOT="
 if exist "%VSWHERE%" (
-    for /f "usebackq delims=" %%I in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VS_ROOT=%%I"
+    for /f "usebackq delims=" %%I in (`call "%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VS_ROOT=%%I"
 )
 
 if not defined VS_ROOT (
     echo Installing Visual Studio 2022 C++ Build Tools...
-    winget install --exact --id Microsoft.VisualStudio.2022.BuildTools --accept-package-agreements --accept-source-agreements --override "--wait --quiet --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-    if errorlevel 1 exit /b 1
+    winget install --exact --id Microsoft.VisualStudio.2022.BuildTools --accept-package-agreements --accept-source-agreements --override "--wait --quiet --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended" || exit /b 1
     if exist "%VSWHERE%" (
-        for /f "usebackq delims=" %%I in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VS_ROOT=%%I"
+        for /f "usebackq delims=" %%I in (`call "%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VS_ROOT=%%I"
     )
 )
 
@@ -103,7 +102,7 @@ pushd "%REPO_ROOT%"
 if errorlevel 1 exit /b 1
 
 echo Syncing the locked Python development environment...
-uv sync --locked --project python\unofficial-osmo-camera
+uv sync --locked
 if errorlevel 1 (
     popd
     exit /b 1
@@ -119,8 +118,12 @@ exit /b 0
 :AddPath
 set "PATH_ENTRY=%~1"
 if not defined PATH_ENTRY exit /b 0
-echo ;%PATH%;| findstr.exe /I /L /C:";%PATH_ENTRY%;" >nul
+echo ";%PATH%;"| findstr.exe /I /L /C:";%PATH_ENTRY%;" >nul
 if errorlevel 1 set "PATH=%PATH_ENTRY%;%PATH%"
+exit /b 0
+
+:AddInstalledPaths
+for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "([Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')) -split ';'"`) do call :AddPath "%%I"
 exit /b 0
 
 :AddPkgConfigPath
@@ -130,6 +133,6 @@ if not defined PKG_CONFIG_PATH (
     set "PKG_CONFIG_PATH=%PKG_CONFIG_ENTRY%"
     exit /b 0
 )
-echo ;%PKG_CONFIG_PATH%;| findstr.exe /I /L /C:";%PKG_CONFIG_ENTRY%;" >nul
+echo ";%PKG_CONFIG_PATH%;"| findstr.exe /I /L /C:";%PKG_CONFIG_ENTRY%;" >nul
 if errorlevel 1 set "PKG_CONFIG_PATH=%PKG_CONFIG_ENTRY%;%PKG_CONFIG_PATH%"
 exit /b 0
