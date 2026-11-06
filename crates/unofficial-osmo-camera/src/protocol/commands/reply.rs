@@ -1,9 +1,11 @@
 //! Shared status-bearing payload types used by command replies.
 
 use crate::{
-    Error, Result,
-    protocol::{ResponseStatus, WireDecode, WireEncode, WireReader, WireWriter},
+    Error,
+    protocol::{ResponseStatus, binrw_error},
 };
+use binrw::{BinRead, BinResult, BinWrite, Endian};
+use std::io::{Read, Seek, Write};
 
 /// A reply with a leading status byte and a preserved rejection extension.
 ///
@@ -23,41 +25,59 @@ pub enum CameraReadReply<T> {
     },
 }
 
-impl<T: WireEncode> WireEncode for CameraReadReply<T> {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
+impl<T> BinWrite for CameraReadReply<T>
+where
+    for<'a> T: BinWrite<Args<'a> = ()>,
+{
+    type Args<'a> = ();
+
+    fn write_options<W: Write + Seek>(
+        &self,
+        writer: &mut W,
+        endian: Endian,
+        (): (),
+    ) -> BinResult<()> {
         match self {
             Self::Accepted(value) => {
-                ResponseStatus::Success.write_to(writer)?;
-                value.write_to(writer)
+                ResponseStatus::Success.write_options(writer, endian, ())?;
+                value.write_options(writer, endian, ())
             }
             Self::Rejected { status, extension } => {
                 if *status == ResponseStatus::Success {
-                    return Err(Error::Protocol("rejected read cannot have success status"));
+                    return Err(binrw_error(
+                        writer.stream_position()?,
+                        Error::Protocol("rejected read cannot have success status"),
+                    ));
                 }
-                status.write_to(writer)?;
-                extension.write_to(writer)
+                status.write_options(writer, endian, ())?;
+                extension.write_options(writer, endian, ())
             }
         }
     }
 }
 
-impl<Q, T: WireDecode<Q>> WireDecode<Q> for CameraReadReply<T> {
-    fn read_from(reader: &mut WireReader<'_>, query: &Q) -> Result<Self> {
-        let status = ResponseStatus::read_from(reader, &())?;
+impl<T: BinRead> BinRead for CameraReadReply<T> {
+    type Args<'a> = T::Args<'a>;
+
+    fn read_options<R: Read + Seek>(
+        reader: &mut R,
+        endian: Endian,
+        args: Self::Args<'_>,
+    ) -> BinResult<Self> {
+        let status = ResponseStatus::read_options(reader, endian, ())?;
         if status != ResponseStatus::Success {
-            let length = reader.remaining().len();
             return Ok(Self::Rejected {
                 status,
-                extension: CameraRawData(reader.read_bytes(length)?.to_vec()),
+                extension: CameraRawData::read_options(reader, endian, ())?,
             });
         }
-        Ok(Self::Accepted(T::read_from(reader, query)?))
+        Ok(Self::Accepted(T::read_options(reader, endian, args)?))
     }
 }
 
 /// Opaque payload bytes retained without interpreting unmapped fields.
-#[derive(Clone, PartialEq, Eq)]
-pub struct CameraRawData(pub Vec<u8>);
+#[derive(Clone, PartialEq, Eq, BinRead, BinWrite)]
+pub struct CameraRawData(#[br(parse_with = binrw::helpers::until_eof)] pub Vec<u8>);
 
 impl std::fmt::Debug for CameraRawData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -67,38 +87,17 @@ impl std::fmt::Debug for CameraRawData {
     }
 }
 
-impl WireEncode for CameraRawData {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        writer.write_bytes(&self.0);
-        Ok(())
-    }
-}
-
-impl<Q> WireDecode<Q> for CameraRawData {
-    fn read_from(reader: &mut WireReader<'_>, _query: &Q) -> Result<Self> {
-        let length = reader.remaining().len();
-        Ok(Self(reader.read_bytes(length)?.to_vec()))
-    }
-}
-
 macro_rules! camera_read_query {
     ($(#[$meta:meta])* $name:ident, $command:expr, $payload:expr, $response:ty) => {
         $(#[$meta])*
-        #[derive(Clone, Copy, Debug)]
+        #[derive(Clone, Copy, Debug, binrw::BinWrite)]
+        #[bw(map = |_: &Self| -> &[u8] { $payload })]
         pub struct $name;
-
-        impl $crate::protocol::WireEncode for $name {
-            fn write_to(
-                &self,
-                writer: &mut $crate::protocol::WireWriter,
-            ) -> $crate::Result<()> {
-                writer.write_bytes($payload);
-                Ok(())
-            }
-        }
 
         impl $crate::protocol::Query for $name {
             type Response = $crate::protocol::commands::reply::CameraReadReply<$response>;
+
+            fn response_args(&self) {}
 
             fn receiver(&self) -> $crate::protocol::identity::Endpoint {
                 $crate::protocol::identity::Endpoint::Camera
@@ -115,35 +114,16 @@ pub(crate) use camera_read_query;
 macro_rules! camera_data {
     ($(#[$meta:meta])* $name:ident, $minimum:expr) => {
         $(#[$meta])*
-        #[derive(Clone, Debug, PartialEq, Eq)]
-        pub struct $name {
-            raw: $crate::protocol::commands::reply::CameraRawData,
-        }
-
-        impl $crate::protocol::WireEncode for $name {
-            fn write_to(
-                &self,
-                writer: &mut $crate::protocol::WireWriter,
-            ) -> $crate::Result<()> {
-                self.raw.write_to(writer)
-            }
-        }
-
-        impl<Q> $crate::protocol::WireDecode<Q> for $name {
-            fn read_from(
-                reader: &mut $crate::protocol::WireReader<'_>,
-                query: &Q,
-            ) -> $crate::Result<Self> {
-                let raw =
-                    $crate::protocol::commands::reply::CameraRawData::read_from(reader, query)?;
-                if raw.0.len() < $minimum {
-                    return Err($crate::Error::Protocol(concat!(
-                        "truncated ",
-                        stringify!($name)
-                    )));
-                }
+        #[derive(Clone, Debug, PartialEq, Eq, binrw::BinRead, binrw::BinWrite)]
+        #[br(try_map = |raw: $crate::protocol::commands::reply::CameraRawData| {
+            if raw.0.len() < $minimum {
+                Err($crate::Error::Protocol(concat!("truncated ", stringify!($name))))
+            } else {
                 Ok(Self { raw })
             }
+        })]
+        pub struct $name {
+            raw: $crate::protocol::commands::reply::CameraRawData,
         }
 
         impl $name {
@@ -158,10 +138,11 @@ pub(crate) use camera_data;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::{decode, encode};
 
     #[test]
     fn rejected_read_keeps_status_and_opaque_extension() {
-        let reply = CameraReadReply::<CameraRawData>::decode(b"\xe3\x01\x02", &()).unwrap();
+        let reply = decode::<CameraReadReply<CameraRawData>>(b"\xe3\x01\x02", ()).unwrap();
         assert_eq!(
             reply,
             CameraReadReply::Rejected {
@@ -169,7 +150,7 @@ mod tests {
                 extension: CameraRawData(vec![1, 2]),
             }
         );
-        assert_eq!(reply.encode().unwrap(), b"\xe3\x01\x02");
+        assert_eq!(encode(&reply).unwrap(), b"\xe3\x01\x02");
     }
 
     #[test]
@@ -178,6 +159,6 @@ mod tests {
             status: ResponseStatus::Success,
             extension: CameraRawData(vec![]),
         };
-        assert!(reply.encode().is_err());
+        assert!(encode(&reply).is_err());
     }
 }

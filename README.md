@@ -58,6 +58,232 @@ names remain compatibility APIs, not evidence of Nano support. Value
 meanings, safe SET payloads and current-state availability remain separate
 questions; no new automatic requests or writes are introduced.
 
+GET replies and checked SET inputs share one lossless `CameraParameterValue`
+enum: `U8(parameter, code)`, `U16(parameter, value)`, `U32(parameter, value)`
+and `Bytes(parameter, bytes)`. Known scalar fields decode to integer shapes;
+structured records, unknown IDs and unexpected widths remain `Bytes`.
+`CameraParameter` is a numeric ID newtype with generated named constants,
+not another enum. Existing names such as `CameraParameter::Eis` retain their
+spelling; `from_id(u16)` and `id()` handle numeric IDs. The macro generates
+constants and scalar-width metadata, not per-parameter payload variants.
+Wire serialization is explicit and little-endian, not a memory-layout cast.
+
+Binary command payloads, numeric wire types, DUML/UDP framing, ACKs and media
+headers use `binrw`. Field types own their wire representation; fixed layouts
+use derives, while checksum coverage, request-dependent validation and bitmap
+algorithms remain explicit. Closed numeric enums use `#[brw(repr = u8)]`
+(or `u16`); open enums use variant `magic` attributes followed by a raw
+`Unknown(u8)` fallback. Unknown codes and opaque extensions stay lossless.
+Fixed command layouts can use `magic`; derived writers calculate length
+prefixes without exposing them as caller-settable fields. Maps remain useful
+for lossless raw representations and checked conversions.
+The module-version reply reads its fixed fields directly; `product_label()`
+names the text accurately, while `hardware()` remains a compatibility alias.
+
+There are no project-specific wire traits or reader/writer types. Use
+`BinRead`/`BinWrite` with standard cursors for composition. The free boundary
+functions `protocol::encode(&value)` and `protocol::decode::<T>(bytes, args)`
+use those traits directly with little-endian defaults. Encoding returns only
+complete payloads; decoding rejects trailing bytes. Arguments are native binrw
+arguments: `()` for ordinary payloads or `(&request,)` for contextual replies.
+`Query::response_args()` supplies the matching response arguments.
+
+Numeric enums no longer provide generated primitive `From`/`Into`/`TryFrom`
+implementations, and no numeric-enum conversion dependency is required.
+Unsupported closed-enum codes produce `Error::WireCodec`; domain validation
+errors retain their existing library variants. Codec errors retain their source
+without displaying potentially sensitive details in the top-level message.
+Frame lengths and counts remain checked before reading variable bodies.
+FEC, incremental framing and H.264 bitstream algorithms remain explicit.
+
+```rust
+use unofficial_osmo_camera::protocol::commands::camera::cmd_02_8e_parameters::{
+    CameraParameter, CameraParameterSet, CameraParameterValue,
+};
+
+fn prepare_setting() -> unofficial_osmo_camera::Result<CameraParameterSet> {
+    let value = CameraParameterValue::U8(CameraParameter::Eis, 7);
+    CameraParameterSet::try_from(value)
+}
+// Encode or explicitly authorize transmission separately.
+```
+
+`CameraParameterSet::try_from` checks write eligibility and code bounds.
+Read-only IDs, wrong shapes/widths and incomplete/asymmetric write contracts are rejected;
+operation coverage alone never enables a new typed write. When migrating from
+the per-parameter enum, supply the ID and wire shape explicitly or use
+`from_raw(parameter, bytes)`. `parameter()` and `value_bytes()` remain available.
+`Bytes` does not bypass scalar or structured-record validation.
+`CameraParameterSet` remains a wrapper, not a separate enum:
+use `value()` or `into_value()` for matching, and clone rather than copy it.
+Existing named setter calls remain compatibility constructors, validating
+when encoded.
+
+All 37 catalogue entries document their value shape or an explicit unknown.
+`nano_get_value_length()` describes the fixed GET width when known;
+`nano_checked_set_value_lengths()` identifies **33 available checked SET
+codecs**, with restricted subsets of some write branches. An empty slice means no checked
+codec; `nano_checked_set_value_length()` returns a width only for a single-width
+codec. TC records have two possible widths, selected by their second byte.
+Covered writes include
+raw audio/mirror codes, bounded image/shutter/recording controls, tagged
+autofocus records, sparse `001F`/`003C` codes and capture-aspect values.
+Capture-aspect SET accepts only 0..=255 despite its four-byte wire width.
+For beauty effects, `CameraParameterValue::beauty_effect([code; 15])` builds
+the complete 62-byte indexed record; `beauty_effect_values()` validates and
+reads that canonical form. Individual effect labels/scales remain unknown,
+and partial beauty patches are not exposed.
+
+Additional checked shapes are duration's five four-byte raw codes;
+`short_video_original_duration_raw(u32)`'s flag-1 nine-byte record;
+TC tag 1 with selector 1..=3 and one byte, or selector 4 and four bytes;
+custom-mode `[raw_index, operation_0_to_3]`; storage-sync start
+`[source_0_to_3, destination_0_to_3, 1]` or canonical stop `[0, 0, 2]`;
+motionlapse preview/interrupt `[raw_code, 0_or_1]`; and a raw motionlapse
+mode byte. These describe byte contracts, not physical mode labels,
+calibration procedures or completion guarantees. Duration SET zero-extends
+its low word as a host choice; arbitrary duration GET bytes are not replayable.
+Short-video added-duration writes remain outside the checked subset.
+
+Camera `0019` exposes only an 11-byte zero-destination streaming-parameter
+trigger: all bytes zero except byte 3 equal to 1. This camera path does not
+forward a destination, resolution or bitrate; the codec does not configure,
+start or stop RTMP. Other profile variants remain unchecked.
+
+Calibration `002B` permits only action 3's raw focal-length record: zero
+metadata, a byte-length-prefixed NUL-terminated label, LE16 extra length 4,
+raw LE16 focal code and two zero bytes. Units and supported codes are unknown.
+Actions 0..=2 remain blocked because their native selectors can terminate the
+provider process. `002D` permits actions 0/2 with one name, or 1 with two names,
+behind an exact LE16 data length. Names are nonempty printable ASCII, at most
+127 characters each; total values cannot exceed 255 bytes. These are byte-level
+checks, not a calibration/file-operation procedure, path policy or provider
+availability guarantee. No apply/rename/delete meanings are assigned.
+
+The four GET-only IDs cannot become SETs. Unknown, unsupported and malformed
+values remain lossless in the shared value enum without granting a checked write.
+Duration GET retains all four bytes, but only its low word has
+an established conversion. Known widths/codes never imply current-mode
+availability, physical semantics, safe retries or an applied setting.
+
+These compatibility constructors include recording EIS
+(`EisCode`, 0..=7), independent live-view EIS (`LiveViewEisCode`, 0..=7),
+stabilization preference (`StabilizationPreferenceCode`, 0/1), and stream
+quality (`StreamQualityCode`, 0/1/2). Mode labels and availability are not
+inferred from those ranges. The compatibility `EisEnabled(bool)` still emits
+codes 0/1, not a physical on/off guarantee. Nano field-of-view SET codes are
+restricted to 0..=5 and voice-language SET codes to 0/1; invalid values now
+return an error before writing bytes. GET decoding continues to preserve
+unknown codes without applying SET limits. These APIs only encode payloads;
+they neither send requests nor authorize changing a camera setting.
+
+### Explicit RTMP controls (experimental)
+
+`ControlSession` exposes `enable_rtmp`, `configure_rtmp`, `start_rtmp`,
+`rtmp_state` and `stop_rtmp`. These use media recipient `0x08`, not the
+camera parameter endpoint `0x01`. Payload codecs live under
+`protocol::commands::media`; the write methods require explicit approval
+on each call. Raw RTMP writes remain blocked; the exact running-state GET
+is available through the typed query API.
+
+```rust
+use unofficial_osmo_camera::{
+    ControlSession, Result, RtmpConfig, StreamingResolution,
+};
+
+fn configure_and_start(session: &mut ControlSession) -> Result<()> {
+    let settings = RtmpConfig::new(
+        "rtmp://example.invalid/live/operator-issued-key",
+        StreamingResolution::FullHd1080,
+        2000, // kbps: illustrative encoding value, not a recommended quality setting
+    )?;
+    session.configure_rtmp(&settings, true)?;
+    session.start_rtmp(true)?;
+    let state = session.rtmp_state()?; // raw state, not proof of receiver video
+    let _ = state;
+    Ok(())
+}
+```
+
+Before that function, explicitly call `session.enable_rtmp(true)` to enter
+broadcast mode. **Mode entry can change the camera's Wi-Fi role and break
+the current control connection.** Establish/recheck an authorized uplink
+and control session after mode entry before configuring and starting.
+The API does not join networks, provide a recovery transport, reconnect
+automatically, or run an RTMP receiver.
+
+Use only a destination and publishing key you control. Plain `rtmp://`
+and `rtmps://` addresses are encoded without a trailing NUL, with at most
+244 bytes to avoid truncating the downstream record length. TLS operation
+is unverified. Debug formatting redacts destination bytes; the settings
+still contain the key in memory and on the control transport.
+
+The high-level configuration uses default FPS, zero-valued unknown fields
+and adaptive bitrate off. `.with_adaptive_bitrate(true)` requests its flag,
+not a guaranteed adaptive policy. Resolution selectors 4/10 request the
+720/1080 size families; rotation can swap width and height. No safe bitrate
+range, delivered frame rate, 4K RTMP mode or working Nano publication is
+promised. Local readiness and successful command replies are not evidence
+of receiver acceptance: verify decodable camera frames, dimensions and
+measured rate independently.
+
+Call `session.stop_rtmp(true)` explicitly to stop and quit broadcast mode.
+It is not a minimal pause and can affect recording and optional service
+cleanup; prior Wi-Fi/recording state is not automatically restored.
+Closing/dropping the control owner does **not** stop RTMP or reconnect
+to do so. Preview and RTMP write lifecycles on the same typed owner are
+mutually exclusive until explicitly stopped; low-level raw mode changes
+are outside this bookkeeping. Failures are returned without an automatic
+retry. Tests use synthetic payloads and an in-memory control worker;
+hardware publication and external media-route acceptance remain unverified.
+
+#### RTMP setup with `osmo-pair`
+
+The CLI accepts the destination as a parameter and always performs full BLE
+pairing and saved Wi-Fi association before each RTMP operation. Approve pairing
+on the camera if prompted. Use a verified `camera_ip` in the selected profile.
+These operations cannot be combined with preview diagnostics or `--lan-only`.
+
+Run an RTMP receiver separately. For a local, single-publisher viewer, FFplay
+supports RTMP listen mode (no GStreamer or separate server is needed):
+
+```powershell
+ffplay -listen 1 -timeout 120 -i "rtmp://0.0.0.0:31935/live/local-test-key"
+```
+
+Then, in another terminal at the repository root, replace the example address
+below with the computer's camera-reachable LAN IP, not the camera IP or
+`0.0.0.0`. Use the same publishing path/key:
+
+```powershell
+cargo run --locked -p unofficial-osmo-camera --features ble --bin osmo-pair -- --camera camera --rtmp-setup "rtmp://192.0.2.20:31935/live/local-test-key"
+```
+
+`--rtmp-setup URL` explicitly approves entering broadcast mode, querying/logging
+the nine opaque state bytes before configuration, configuring, starting, and
+querying/logging state again. Defaults request the 720 size family at 2000 kbps;
+use `--rtmp-resolution 1080` and/or `--rtmp-bitrate KBPS` to override. These are
+experimental encoding choices, not established safe ranges or quality claims.
+The application does not print or save the destination/key; **URL arguments
+can still appear in shell history and process listings**.
+
+Successful setup leaves publication running after the control owner closes,
+without stopping or restoring camera state. Verify decoded video at the
+receiver independently. The following commands each pair/reapply Wi-Fi first,
+which can itself disrupt an existing stream:
+
+```powershell
+cargo run --locked -p unofficial-osmo-camera --features ble --bin osmo-pair -- --rtmp-state
+cargo run --locked -p unofficial-osmo-camera --features ble --bin osmo-pair -- --rtmp-stop
+```
+
+State-query rejections report only their first status byte and reply length.
+Setup failures attempt stop/quit on the same owner, explicitly report an
+unconfirmed stop, close the owner and return failure. They do not reconnect,
+retry RTMP commands, or recover the camera's network after broadcast-mode
+entry. No working Nano publication is promised. Run `osmo-pair --help` for
+options without connecting to hardware.
+
 ## Python testing wrapper
 
 Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/).
@@ -70,13 +296,17 @@ GStreamer is not required. uv uses the default `microsoft-python` package index
 at `https://packagefeedproxy.microsoft.io/pypi/simple/`.
 
 ```powershell
-uv sync --locked
+uv sync --locked --link-mode copy
 uv run --project .\python\unofficial-osmo-camera --no-sync maturin develop --locked --manifest-path .\python\unofficial-osmo-camera\Cargo.toml
 uv run --project .\python\unofficial-osmo-camera --no-sync python -m unittest discover -s .\python\unofficial-osmo-camera\tests
 uv run --project .\python\unofficial-osmo-camera --no-sync ruff check .\python\unofficial-osmo-camera
 uv run --project .\python\unofficial-osmo-camera --no-sync ruff format --check .\python\unofficial-osmo-camera
 cargo fmt --manifest-path .\python\unofficial-osmo-camera\Cargo.toml -- --check
 ```
+
+Repeat `uv sync --locked --link-mode copy` after tooling lockfile updates;
+`--no-sync` uses the installed tools without updating them. Copy mode avoids
+hardlink warnings when the cache and workspace are on different drives.
 
 Re-run `maturin develop` after changing Rust code. For a distributable wheel
 and source archive:
@@ -158,8 +388,16 @@ camera_ip = "192.0.2.10"
 Keep the profile local and do not commit it; `.gitignore` excludes
 `.credentials`.
 
-After building the plugin, run this from the configured Command Prompt and
-repository root:
+After building the plugin, Windows users can run `view-nano.cmd` to open the
+live viewer using the saved `camera`
+profile after asking for startup approval. It locates the installed GStreamer
+runtime and debug plugin automatically, even when launched from another
+directory. Use `view-nano.cmd office` for another profile or
+`view-nano.cmd --check` to check prerequisites without connecting. It does not
+install dependencies or build the plugin.
+
+The equivalent manual pipeline, from a configured Command Prompt at the
+repository root, is:
 
 ```cmd
 set GST_PLUGIN_PATH=%CD%\target\debug
@@ -230,6 +468,17 @@ behavior applies.
 Use `RUST_LOG` for CLI diagnostics or set `GST_DEBUG=osmo-camera:6` before
 launching a GStreamer pipeline. Logs go to stderr or the host logger, not
 automatically to files. Review logs before sharing them.
+
+At `unofficial_osmo_camera=debug`, BLE and LAN control diagnostics include
+every decoded/sent message's direction, numeric endpoints, command, ID, flags
+and payload length, including unmatched replies and notifications.
+At `unofficial_osmo_camera=trace`, they also include BLE packet lengths and
+LAN UDP packet types, lengths, sequence numbers and elapsed timing. Logger
+timestamps provide BLE timing. These metadata diagnostics exclude payload
+bytes, pairing identities, RTMP addresses/keys and network addresses; they are
+not raw traffic captures. A sent message is not proof of camera acceptance.
+The host must enable the log level and supply timestamps; for CLI runs, use
+`RUST_LOG=unofficial_osmo_camera=trace,osmo_pair=info`.
 
 ### Current limitations
 

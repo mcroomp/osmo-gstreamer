@@ -1,14 +1,9 @@
 //! Camera playback-mode requests.
 
-use crate::{
-    Result,
-    protocol::{WireEncode, WireWriter},
-};
-use num_enum::{IntoPrimitive, TryFromPrimitive};
+use binrw::{BinRead, BinWrite};
 
-const PLAYBACK_PREFIX: [u8; 3] = [1, 1, 0];
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, IntoPrimitive, TryFromPrimitive)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinWrite, BinRead)]
+#[brw(repr = u8)]
 #[repr(u8)]
 pub enum PlaybackMode {
     Leave = 0,
@@ -28,15 +23,8 @@ pub enum PlaybackMode {
 /// The encoder emits exactly four bytes. A zero status acknowledges the mode
 /// request, not completion of every ancillary storage/transfer operation.
 /// Preview setup separately waits for the playback state notification.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, BinWrite)]
+#[bw(magic = b"\x01\x01\x00")]
 pub struct PlaybackRequest {
     pub mode: PlaybackMode,
-}
-
-impl WireEncode for PlaybackRequest {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        writer.write_bytes(&PLAYBACK_PREFIX);
-        writer.write_u8(self.mode.into());
-        Ok(())
-    }
 }

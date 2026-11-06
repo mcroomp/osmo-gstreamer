@@ -1,9 +1,10 @@
 //! Camera-module version query on the common command set.
+use binrw::{BinRead, BinWrite};
 
 use crate::{
-    Error, Result,
+    Error,
     protocol::{
-        Query, WireDecode, WireEncode, WireReader, WireWriter,
+        Query,
         commands::reply::{CameraRawData, CameraReadReply},
         identity::{Command, CommonCommand, Endpoint},
     },
@@ -24,17 +25,14 @@ use crate::{
 ///     extension: [u8; remaining]
 /// }
 /// ```
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, BinWrite)]
+#[bw(map = |_: &Self| ())]
 pub struct CameraModuleVersionGet;
-
-impl WireEncode for CameraModuleVersionGet {
-    fn write_to(&self, _writer: &mut WireWriter) -> Result<()> {
-        Ok(())
-    }
-}
 
 impl Query for CameraModuleVersionGet {
     type Response = CameraReadReply<CameraModuleVersion>;
+
+    fn response_args(&self) {}
 
     fn receiver(&self) -> Endpoint {
         Endpoint::Camera
@@ -57,87 +55,117 @@ impl Query for CameraModuleVersionGet {
 /// ```
 ///
 /// At least 25 accepted-body bytes are required. `firmware()` returns the
-/// four version bytes in reverse wire order; `WireEncode` preserves wire order.
+/// four version bytes in reverse wire order; `BinWrite` preserves wire order.
 /// The Nano layout is 30 data bytes after status, with five bytes beyond this
 /// decoder's prefix. The other words are not assigned hardware/bootloader
 /// meanings, and no product label is hardcoded.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, BinRead, BinWrite)]
 pub struct CameraModuleVersion {
-    hardware: String,
-    firmware: [u8; 4],
-    raw: CameraRawData,
+    format: u8,
+    #[br(assert(product_label.iter().take_while(|&&byte| byte != 0)
+        .all(|byte| (b' '..=b'~').contains(byte)), Error::Protocol("invalid module hardware ASCII")))]
+    product_label: [u8; 16],
+    unknown: [u8; 4],
+    version: [u8; 4],
+    extension: CameraRawData,
 }
 
 impl CameraModuleVersion {
+    /// Printable product label through the first NUL, without interpreting a model.
+    pub fn product_label(&self) -> &str {
+        let length = self
+            .product_label
+            .iter()
+            .position(|&byte| byte == 0)
+            .unwrap_or(self.product_label.len());
+        std::str::from_utf8(&self.product_label[..length])
+            .expect("product label validated as printable ASCII")
+    }
+
     /// Compatibility name for the product label, not a hardware revision field.
     pub fn hardware(&self) -> &str {
-        &self.hardware
+        self.product_label()
     }
 
     pub fn firmware(&self) -> [u8; 4] {
-        self.firmware
+        let mut version = self.version;
+        version.reverse();
+        version
     }
 }
 
-impl WireEncode for CameraModuleVersion {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        self.raw.write_to(writer)
-    }
-}
-
-impl<Q> WireDecode<Q> for CameraModuleVersion {
-    fn read_from(reader: &mut WireReader<'_>, query: &Q) -> Result<Self> {
-        let raw = CameraRawData::read_from(reader, query)?;
-        if raw.0.len() < 25 {
-            return Err(Error::Protocol("truncated camera module version"));
-        }
-        let text = raw.0[1..17]
-            .split(|byte| *byte == 0)
-            .next()
-            .ok_or(Error::Protocol("missing module hardware text"))?;
-        if !text.iter().all(|byte| (32..=126).contains(byte)) {
-            return Err(Error::Protocol("invalid module hardware ASCII"));
-        }
-        let hardware = std::str::from_utf8(text)
-            .map_err(|_| Error::Protocol("invalid module hardware ASCII"))?
-            .to_owned();
-        let firmware = [raw.0[24], raw.0[23], raw.0[22], raw.0[21]];
-        Ok(Self {
-            hardware,
-            firmware,
-            raw,
-        })
+impl std::fmt::Debug for CameraModuleVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CameraModuleVersion")
+            .field("hardware", &self.product_label())
+            .field("firmware", &self.firmware())
+            .field("extension", &self.extension)
+            .finish_non_exhaustive()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::WireDecode;
+    use crate::protocol::{decode, encode};
 
     #[test]
     fn module_version_fields_and_extension_round_trip() {
-        let query = CameraModuleVersionGet;
+        let _query = CameraModuleVersionGet;
 
         let mut payload = vec![0; 27];
         payload[2..8].copy_from_slice(b"CAM001");
         payload[22..26].copy_from_slice(&[4, 3, 2, 1]);
         payload[26] = 0xee;
-        let reply = CameraReadReply::<CameraModuleVersion>::decode(&payload, &query).unwrap();
+        let reply = decode::<CameraReadReply<CameraModuleVersion>>(&payload, ()).unwrap();
         let CameraReadReply::Accepted(value) = reply else {
             panic!("expected accepted module-version reply");
         };
+        assert_eq!(value.product_label(), "CAM001");
         assert_eq!(value.hardware(), "CAM001");
         assert_eq!(value.firmware(), [1, 2, 3, 4]);
-        assert_eq!(value.encode().unwrap(), payload[1..]);
+        assert_eq!(encode(&value).unwrap(), payload[1..]);
     }
 
     #[test]
     fn invalid_module_version_bytes_are_rejected() {
-        let query = CameraModuleVersionGet;
+        let _query = CameraModuleVersionGet;
         let mut payload = vec![0; 25];
         payload[1] = 0xff;
-        assert!(CameraReadReply::<CameraModuleVersion>::decode(&payload, &query).is_err());
-        assert!(CameraReadReply::<CameraModuleVersion>::decode(&[0; 24], &query).is_err());
+        assert!(decode::<CameraReadReply::<CameraModuleVersion>>(&payload, ()).is_err());
+        assert!(decode::<CameraReadReply::<CameraModuleVersion>>(&[0; 24], ()).is_err());
+    }
+
+    #[test]
+    fn module_version_preserves_every_field_and_only_validates_label_before_nul() {
+        let mut bytes = vec![0xa5; 29];
+        bytes[1..17].copy_from_slice(b"SYNTHETIC MODULE");
+        bytes[21..25].copy_from_slice(&[0x12, 0x34, 0x56, 0x78]);
+        let value = decode::<CameraModuleVersion>(&bytes, ()).unwrap();
+        assert_eq!(value.product_label(), "SYNTHETIC MODULE");
+        assert_eq!(value.firmware(), [0x78, 0x56, 0x34, 0x12]);
+        assert_eq!(encode(&value).unwrap(), bytes);
+
+        bytes[4] = 0;
+        bytes[5..17].fill(0xff);
+        let value = decode::<CameraModuleVersion>(&bytes, ()).unwrap();
+        assert_eq!(value.product_label(), "SYN");
+        assert_eq!(encode(&value).unwrap(), bytes);
+        for length in 0..25 {
+            assert!(decode::<CameraModuleVersion>(&bytes[..length], ()).is_err());
+        }
+
+        for byte in u8::MIN..=u8::MAX {
+            bytes[1] = byte;
+            let decoded = decode::<CameraModuleVersion>(&bytes, ());
+            if byte == 0 || (b' '..=b'~').contains(&byte) {
+                assert_eq!(encode(&decoded.unwrap()).unwrap(), bytes);
+            } else {
+                assert!(matches!(
+                    decoded,
+                    Err(Error::Protocol("invalid module hardware ASCII"))
+                ));
+            }
+        }
     }
 }

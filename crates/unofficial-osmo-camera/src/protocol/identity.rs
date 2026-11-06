@@ -1,164 +1,182 @@
 //! Wire identities used by DUML requests and replies.
 
-use super::{WireDecode, WireEncode, WireReader, WireU8, WireWriter};
-use crate::Result;
-use num_enum::{FromPrimitive, IntoPrimitive};
+use binrw::{BinRead, BinWrite};
+use std::io::Cursor;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, IntoPrimitive)]
-#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
 pub enum Endpoint {
-    Camera = 0x01,
-    App = 0x02,
-    Gimbal = 0x03,
-    Wifi = 0x07,
-    Presence = 0x28,
-    LiveView = 0x41,
-    DeviceInfo = 0x48,
-    CameraWake = 0x1c,
-    Session = 0xf0,
-    #[num_enum(catch_all)]
+    #[brw(magic = 0x01u8)]
+    Camera,
+    #[brw(magic = 0x02u8)]
+    App,
+    #[brw(magic = 0x03u8)]
+    Gimbal,
+    #[brw(magic = 0x07u8)]
+    Wifi,
+    /// Media-service endpoint; distinct from camera endpoint 0x01.
+    #[brw(magic = 0x08u8)]
+    Media,
+    #[brw(magic = 0x28u8)]
+    Presence,
+    #[brw(magic = 0x41u8)]
+    LiveView,
+    #[brw(magic = 0x48u8)]
+    DeviceInfo,
+    #[brw(magic = 0x1cu8)]
+    CameraWake,
+    #[brw(magic = 0xf0u8)]
+    Session,
     Unknown(u8),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, IntoPrimitive)]
-#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
 pub enum CommandSet {
-    Common = 0x00,
-    Camera = 0x02,
-    Gimbal = 0x03,
-    Wifi = 0x07,
-    LiveView = 0x09,
-    CameraWake = 0x53,
-    #[num_enum(catch_all)]
+    #[brw(magic = 0x00u8)]
+    Common,
+    #[brw(magic = 0x02u8)]
+    Camera,
+    #[brw(magic = 0x03u8)]
+    Gimbal,
+    #[brw(magic = 0x07u8)]
+    Wifi,
+    #[brw(magic = 0x09u8)]
+    LiveView,
+    #[brw(magic = 0x53u8)]
+    CameraWake,
     Unknown(u8),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, IntoPrimitive)]
-#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
 pub enum CommonCommand {
-    ModuleVersion = 0x01,
-    DeviceInfo = 0x81,
-    AppPresence = 0x88,
-    SessionKeepalive = 0x2b,
-    ActivationStatus = 0x32,
-    #[num_enum(catch_all)]
+    #[brw(magic = 0x01u8)]
+    ModuleVersion,
+    #[brw(magic = 0x81u8)]
+    DeviceInfo,
+    #[brw(magic = 0x88u8)]
+    AppPresence,
+    #[brw(magic = 0x2bu8)]
+    SessionKeepalive,
+    #[brw(magic = 0x32u8)]
+    ActivationStatus,
     Unknown(u8),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, IntoPrimitive)]
-#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
 pub enum CameraCommand {
-    VideoFormatSet = 0x18,
-    Playback = 0x0c,
-    State = 0x80,
-    LiveViewSource = 0x09,
-    LiveViewQualitySet = 0x1a,
-    LiveViewOutputSet = 0x4c,
-    Parameters = 0x8e,
-    UserIso = 0x2b,
-    UserShutter = 0x29,
-    AeLock = 0x69,
-    Audio = 0xa0,
-    StorageLocation = 0xda,
-    Aeb = 0x5f,
-    Language = 0x57,
-    VideoCaption = 0x63,
-    PhotoInterval = 0x4b,
-    Watermark = 0xe5,
-    Capabilities = 0xe0,
-    #[num_enum(catch_all)]
+    #[brw(magic = 0x18u8)]
+    VideoFormatSet,
+    #[brw(magic = 0x0cu8)]
+    Playback,
+    #[brw(magic = 0x80u8)]
+    State,
+    #[brw(magic = 0x09u8)]
+    LiveViewSource,
+    #[brw(magic = 0x1au8)]
+    LiveViewQualitySet,
+    #[brw(magic = 0x4cu8)]
+    LiveViewOutputSet,
+    #[brw(magic = 0x8eu8)]
+    Parameters,
+    #[brw(magic = 0x2bu8)]
+    UserIso,
+    #[brw(magic = 0x29u8)]
+    UserShutter,
+    #[brw(magic = 0x69u8)]
+    AeLock,
+    #[brw(magic = 0xa0u8)]
+    Audio,
+    #[brw(magic = 0xdau8)]
+    StorageLocation,
+    #[brw(magic = 0x5fu8)]
+    Aeb,
+    #[brw(magic = 0x57u8)]
+    Language,
+    #[brw(magic = 0x63u8)]
+    VideoCaption,
+    #[brw(magic = 0x4bu8)]
+    PhotoInterval,
+    #[brw(magic = 0xe5u8)]
+    Watermark,
+    #[brw(magic = 0xe0u8)]
+    Capabilities,
     Unknown(u8),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, IntoPrimitive)]
-#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
 pub enum GimbalCommand {
-    Initialize = 0xda,
-    #[num_enum(catch_all)]
+    #[brw(magic = 0xdau8)]
+    Initialize,
     Unknown(u8),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, IntoPrimitive)]
-#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
 pub enum WifiCommand {
-    Pair = 0x45,
-    Country = 0x19,
-    Ssid = 0x07,
-    Mac = 0x0c,
-    Password = 0x0e,
-    GetRole = 0x39,
-    PairApproval = 0x46,
-    JoinNetwork = 0x47,
-    SetRole = 0x48,
-    #[num_enum(catch_all)]
+    #[brw(magic = 0x45u8)]
+    Pair,
+    #[brw(magic = 0x19u8)]
+    Country,
+    #[brw(magic = 0x07u8)]
+    Ssid,
+    #[brw(magic = 0x0cu8)]
+    Mac,
+    #[brw(magic = 0x0eu8)]
+    Password,
+    #[brw(magic = 0x39u8)]
+    GetRole,
+    #[brw(magic = 0x46u8)]
+    PairApproval,
+    #[brw(magic = 0x47u8)]
+    JoinNetwork,
+    #[brw(magic = 0x48u8)]
+    SetRole,
     Unknown(u8),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, IntoPrimitive)]
-#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
 pub enum LiveViewCommand {
-    StartTransmission = 0xa8,
-    #[num_enum(catch_all)]
+    #[brw(magic = 0xa8u8)]
+    StartTransmission,
     Unknown(u8),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, IntoPrimitive)]
-#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
 pub enum CameraWakeCommand {
-    Wake = 0x10,
-    #[num_enum(catch_all)]
+    #[brw(magic = 0x10u8)]
+    Wake,
     Unknown(u8),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
 pub enum Command {
+    #[brw(magic = 0x00u8)]
     Common(CommonCommand),
+    #[brw(magic = 0x02u8)]
     Camera(CameraCommand),
+    #[brw(magic = 0x03u8)]
     Gimbal(GimbalCommand),
+    #[brw(magic = 0x07u8)]
     Wifi(WifiCommand),
+    #[brw(magic = 0x09u8)]
     LiveView(LiveViewCommand),
+    #[brw(magic = 0x53u8)]
     CameraWake(CameraWakeCommand),
-    Unknown { set: u8, id: u8 },
+    Unknown {
+        set: u8,
+        id: u8,
+    },
 }
 
 impl Command {
     pub fn from_wire(set: u8, id: u8) -> Self {
-        match CommandSet::from(set) {
-            CommandSet::Common => Self::Common(CommonCommand::from(id)),
-            CommandSet::Camera => Self::Camera(CameraCommand::from(id)),
-            CommandSet::Gimbal => Self::Gimbal(GimbalCommand::from(id)),
-            CommandSet::Wifi => Self::Wifi(WifiCommand::from(id)),
-            CommandSet::LiveView => Self::LiveView(LiveViewCommand::from(id)),
-            CommandSet::CameraWake => Self::CameraWake(CameraWakeCommand::from(id)),
-            CommandSet::Unknown(set) => Self::Unknown { set, id },
-        }
+        Self::read_le(&mut Cursor::new([set, id]))
+            .expect("command fallback accepts every two-byte identity")
     }
 
     pub fn wire(self) -> (u8, u8) {
-        let (set, id) = match self {
-            Self::Common(command) => (CommandSet::Common, command.to_wire_u8()),
-            Self::Camera(command) => (CommandSet::Camera, command.to_wire_u8()),
-            Self::Gimbal(command) => (CommandSet::Gimbal, command.to_wire_u8()),
-            Self::Wifi(command) => (CommandSet::Wifi, command.to_wire_u8()),
-            Self::LiveView(command) => (CommandSet::LiveView, command.to_wire_u8()),
-            Self::CameraWake(command) => (CommandSet::CameraWake, command.to_wire_u8()),
-            Self::Unknown { set, id } => (CommandSet::Unknown(set), id),
-        };
-        (set.to_wire_u8(), id)
-    }
-}
-
-impl WireEncode for Command {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        let (set, id) = self.wire();
-        writer.write_u8(set);
-        writer.write_u8(id);
-        Ok(())
-    }
-}
-
-impl WireDecode for Command {
-    fn read_from(reader: &mut WireReader<'_>, _context: &()) -> Result<Self> {
-        Ok(Self::from_wire(reader.read_u8()?, reader.read_u8()?))
+        let mut cursor = Cursor::new([0u8; 2]);
+        self.write_le(&mut cursor)
+            .expect("command identity encodes exactly two bytes");
+        let [set, id] = cursor.into_inner();
+        (set, id)
     }
 }

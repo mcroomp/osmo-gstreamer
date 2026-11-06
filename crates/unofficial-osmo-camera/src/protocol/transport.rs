@@ -1,6 +1,9 @@
-use super::{WireDecode, WireEncode, WireReader, WireU8, WireWriter};
+use super::binrw_error;
+use crate::protocol::{decode, encode};
+
 use crate::{Error, Result};
-use num_enum::{FromPrimitive, IntoPrimitive, TryFromPrimitive};
+use binrw::{BinRead, BinResult, BinWrite, Endian};
+use std::io::{Cursor, Read, Seek, Write};
 
 pub const UDP_PORT: u16 = 9004;
 pub const PAIRING_PORT: u16 = 7001;
@@ -94,52 +97,53 @@ pub const SYN_PARAMETERS: &[u8] = &[
     0, 100, 0, 0xc0, 5, 20, 0, 0, 100, 0, 1, 1, 4, 1, 2,
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, IntoPrimitive)]
-#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
 pub enum ResponseStatus {
-    Success = 0,
-    #[num_enum(catch_all)]
+    #[brw(magic = 0u8)]
+    Success,
     Unknown(u8),
 }
+
 impl std::fmt::Display for ResponseStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:02X}", self.to_wire_u8())
+        write!(
+            f,
+            "{:02X}",
+            encode(&self).expect("one-byte enum encodes into memory")[0]
+        )
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
-#[num_enum(error_type(name = Error, constructor = MediaType::invalid_wire))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinWrite, BinRead)]
+#[brw(repr = u8)]
 #[repr(u8)]
 pub enum MediaType {
     Video = 0x11,
     Command = 0x12,
     Audio = 0x24,
 }
-impl MediaType {
-    fn invalid_wire(value: u8) -> Error {
-        Error::UnsupportedValue {
-            field: "media envelope type",
-            value,
-        }
-    }
-}
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, IntoPrimitive)]
-#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
 pub enum PacketType {
-    Handshake = 0,
-    StreamWindow = 1,
-    Video = 2,
-    Download = 3,
-    Acknowledgment = 4,
-    RoutedCommand = 5,
-    ListAcknowledgment = 6,
-    #[num_enum(catch_all)]
+    #[brw(magic = 0u8)]
+    Handshake,
+    #[brw(magic = 1u8)]
+    StreamWindow,
+    #[brw(magic = 2u8)]
+    Video,
+    #[brw(magic = 3u8)]
+    Download,
+    #[brw(magic = 4u8)]
+    Acknowledgment,
+    #[brw(magic = 5u8)]
+    RoutedCommand,
+    #[brw(magic = 6u8)]
+    ListAcknowledgment,
     Unknown(u8),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
-#[num_enum(error_type(name = Error, constructor = RetryPhase::invalid_wire))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinWrite, BinRead)]
+#[brw(repr = u16)]
 #[repr(u16)]
 pub enum RetryPhase {
     Initial = 0,
@@ -148,9 +152,6 @@ pub enum RetryPhase {
     Final = 3,
 }
 impl RetryPhase {
-    fn invalid_wire(_value: u16) -> Error {
-        Error::Protocol("invalid retry phase")
-    }
     pub fn of(sequence: u16) -> Self {
         match (sequence >> RETRY_SHIFT) & RETRY_VALUE_MASK {
             value if value == Self::Initial as u16 => Self::Initial,
@@ -160,39 +161,22 @@ impl RetryPhase {
         }
     }
 }
-impl WireEncode for RetryPhase {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        writer.write_u16_le((*self).into());
-        Ok(())
-    }
-}
-impl WireDecode for RetryPhase {
-    fn read_from(reader: &mut WireReader<'_>, _context: &()) -> Result<Self> {
-        Self::try_from(reader.read_u16_le()?)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
-#[num_enum(error_type(name = Error, constructor = AckEncoding::invalid_wire))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinWrite, BinRead)]
+#[brw(repr = u8)]
 #[repr(u8)]
 pub enum AckEncoding {
     List = 0,
     Compressed = 1,
 }
+
 impl AckEncoding {
-    fn invalid_wire(value: u8) -> Error {
-        Error::UnsupportedValue {
-            field: "negotiated ACK encoding",
-            value,
-        }
-    }
     pub fn parse(value: u8) -> Result<Self> {
-        Self::from_wire_u8(value)
+        decode::<Self>(&[value], ())
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
-#[num_enum(error_type(name = Error, constructor = AvcNal::invalid_wire))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinWrite, BinRead)]
+#[brw(repr = u8)]
 #[repr(u8)]
 pub enum AvcNal {
     Slice = 1,
@@ -201,44 +185,32 @@ pub enum AvcNal {
     Pps = 8,
     Aud = 9,
 }
-impl AvcNal {
-    fn invalid_wire(value: u8) -> Error {
-        Error::UnsupportedValue {
-            field: "AVC NAL type",
-            value,
-        }
-    }
-}
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
-#[num_enum(error_type(name = Error, constructor = HevcNal::invalid_wire))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinWrite, BinRead)]
+#[brw(repr = u8)]
 #[repr(u8)]
 pub enum HevcNal {
     Vps = 32,
     Sps = 33,
     Pps = 34,
 }
-impl HevcNal {
-    fn invalid_wire(value: u8) -> Error {
-        Error::UnsupportedValue {
-            field: "HEVC NAL type",
-            value,
-        }
-    }
-}
 
 pub fn u16_at(bytes: &[u8], offset: usize) -> u16 {
-    u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
+    u16::read_options(&mut Cursor::new(&bytes[offset..]), Endian::Little, ())
+        .expect("checked wire length")
 }
 pub fn u32_at(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(
-        bytes[offset..offset + 4]
-            .try_into()
-            .expect("checked wire length"),
-    )
+    u32::read_options(&mut Cursor::new(&bytes[offset..]), Endian::Little, ())
+        .expect("checked wire length")
 }
 pub fn put16(bytes: &mut [u8], offset: usize, value: u16) {
-    bytes[offset..offset + WORD].copy_from_slice(&value.to_le_bytes());
+    value
+        .write_options(
+            &mut Cursor::new(&mut bytes[offset..offset + WORD]),
+            Endian::Little,
+            (),
+        )
+        .expect("checked wire length");
 }
 pub fn distance(earlier: u16, later: u16) -> u16 {
     (later >> SEQUENCE_SHIFT).wrapping_sub(earlier >> SEQUENCE_SHIFT) & INDEX_MASK
@@ -255,86 +227,129 @@ pub struct UdpDatagram {
     pub payload: Vec<u8>,
 }
 
-impl WireEncode for UdpDatagram {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        let length = UDP_HEADER + self.payload.len();
-        if length > usize::from(UDP_LENGTH_MASK) {
-            return Err(Error::LimitExceeded("UDP payload exceeds wire limit"));
-        }
+#[derive(BinRead, BinWrite)]
+#[brw(little)]
+pub(crate) struct DatagramHeader {
+    pub marker: u16,
+    pub session: u16,
+    pub sequence: u16,
+    pub kind: PacketType,
+    pub checksum: u8,
+}
 
-        let start = writer.as_slice().len();
-        writer.write_u16_le(UDP_LENGTH_MARKER | length as u16);
-        writer.write_u16_le(self.session);
-        writer.write_u16_le(self.sequence);
-        self.kind.write_to(writer)?;
-        let checksum = writer.as_slice()[start..]
+impl DatagramHeader {
+    fn validate(&self, bytes: &[u8], expected_session: u16) -> Result<usize> {
+        let length = usize::from(self.marker & UDP_LENGTH_MASK);
+        if self.marker & !UDP_LENGTH_MASK != UDP_LENGTH_MARKER || length < UDP_HEADER {
+            return Err(Error::Protocol("invalid UDP datagram length marker"));
+        }
+        if bytes[..UDP_CHECKSUM_OFFSET]
+            .iter()
+            .fold(0, |checksum, byte| checksum ^ byte)
+            != self.checksum
+        {
+            return Err(Error::Protocol("invalid UDP datagram checksum"));
+        }
+        if self.session != expected_session {
+            return Err(Error::Protocol("UDP datagram belongs to another session"));
+        }
+        Ok(length)
+    }
+
+    pub(crate) fn parse(bytes: &[u8], expected_session: u16) -> Result<Self> {
+        let header_bytes = bytes
+            .get(..UDP_HEADER)
+            .ok_or(Error::Protocol("truncated UDP datagram header"))?;
+        let header = decode::<Self>(header_bytes, ())?;
+        if header.validate(header_bytes, expected_session)? != bytes.len() {
+            return Err(Error::Protocol("invalid UDP datagram length marker"));
+        }
+        Ok(header)
+    }
+}
+
+#[derive(Clone, Copy, BinRead, BinWrite)]
+#[brw(little)]
+pub(crate) struct SenderWindow {
+    pub left: u16,
+    pub right: u16,
+    pub first_retry: u16,
+    pub second_retry: u16,
+}
+
+impl BinWrite for UdpDatagram {
+    type Args<'a> = ();
+
+    fn write_options<W: Write + Seek>(&self, writer: &mut W, _: Endian, (): ()) -> BinResult<()> {
+        let pos = writer.stream_position()?;
+        if self.payload.len() > usize::from(UDP_LENGTH_MASK) - UDP_HEADER {
+            return Err(binrw_error(
+                pos,
+                Error::LimitExceeded("UDP payload exceeds wire limit"),
+            ));
+        }
+        let length = UDP_HEADER + self.payload.len();
+        let mut frame = Cursor::new(Vec::with_capacity(length));
+        (
+            UDP_LENGTH_MARKER | length as u16,
+            self.session,
+            self.sequence,
+            self.kind,
+        )
+            .write_options(&mut frame, Endian::Little, ())?;
+        let checksum = frame
+            .get_ref()
             .iter()
             .fold(0, |checksum, byte| checksum ^ byte);
-        writer.write_u8(checksum);
-        writer.write_bytes(&self.payload);
+        checksum.write_options(&mut frame, Endian::Little, ())?;
+        frame.write_all(&self.payload)?;
+        writer.write_all(frame.get_ref())?;
         Ok(())
     }
 }
 
-impl WireDecode<u16> for UdpDatagram {
-    fn read_from(reader: &mut WireReader<'_>, expected_session: &u16) -> Result<Self> {
-        let remaining = reader.remaining();
-        if remaining.len() < UDP_HEADER {
-            return Err(Error::Protocol("truncated UDP datagram header"));
-        }
+impl BinRead for UdpDatagram {
+    type Args<'a> = (&'a u16,);
 
-        let mut header = WireReader::new(remaining);
-        let marker = header.read_u16_le()?;
-        let length = usize::from(marker & UDP_LENGTH_MASK);
-        if marker & !UDP_LENGTH_MASK != UDP_LENGTH_MARKER
-            || length < UDP_HEADER
-            || length > remaining.len()
-        {
-            return Err(Error::Protocol("invalid UDP datagram length marker"));
-        }
-
-        let session = header.read_u16_le()?;
-        let sequence = header.read_u16_le()?;
-        let kind = PacketType::read_from(&mut header, &())?;
-        let checksum = header.read_u8()?;
-        if remaining[..UDP_CHECKSUM_OFFSET]
-            .iter()
-            .fold(0, |checksum, byte| checksum ^ byte)
-            != checksum
-        {
-            return Err(Error::Protocol("invalid UDP datagram checksum"));
-        }
-        if session != *expected_session {
-            return Err(Error::Protocol("UDP datagram belongs to another session"));
-        }
-
-        reader.read_bytes(UDP_HEADER)?;
-        let payload = reader.read_bytes(length - UDP_HEADER)?.to_vec();
+    fn read_options<R: Read + Seek>(
+        reader: &mut R,
+        _: Endian,
+        (expected_session,): Self::Args<'_>,
+    ) -> BinResult<Self> {
+        let pos = reader.stream_position()?;
+        let mut bytes = [0; UDP_HEADER];
+        reader.read_exact(&mut bytes)?;
+        let header = DatagramHeader::read_options(&mut Cursor::new(bytes), Endian::Little, ())?;
+        let length = header
+            .validate(&bytes, *expected_session)
+            .map_err(|error| binrw_error(pos, error))?;
+        let mut payload = vec![0; length - UDP_HEADER];
+        reader.read_exact(&mut payload)?;
         Ok(Self {
-            kind,
-            session,
-            sequence,
+            kind: header.kind,
+            session: header.session,
+            sequence: header.sequence,
             payload,
         })
     }
 }
 
 pub fn datagram(kind: PacketType, session: u16, sequence: u16, payload: &[u8]) -> Result<Vec<u8>> {
-    UdpDatagram {
+    encode(&UdpDatagram {
         kind,
         session,
         sequence,
         payload: payload.to_vec(),
-    }
-    .encode()
+    })
 }
 pub fn valid_datagram(bytes: &[u8], session: u16) -> bool {
-    <UdpDatagram as WireDecode<u16>>::decode(bytes, &session).is_ok()
+    DatagramHeader::parse(bytes, session).is_ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::{decode, encode};
 
     #[test]
     fn udp_datagram_encodes_and_decodes_exact_wire_fields() {
@@ -344,7 +359,7 @@ mod tests {
             sequence: 0xabcd,
             payload: vec![0x10, 0x20, 0x30],
         };
-        let encoded = datagram.encode().unwrap();
+        let encoded = encode(&datagram).unwrap();
         assert_eq!(
             encoded,
             [
@@ -352,14 +367,42 @@ mod tests {
             ]
         );
         assert_eq!(
-            UdpDatagram::decode(&encoded, &datagram.session).unwrap(),
+            decode::<UdpDatagram>(&encoded, (&datagram.session,)).unwrap(),
             datagram
         );
-        assert!(UdpDatagram::decode(&encoded, &0x9999).is_err());
-        assert!(UdpDatagram::decode(&encoded[..encoded.len() - 1], &datagram.session).is_err());
+        assert!(decode::<UdpDatagram>(&encoded, (&0x9999,)).is_err());
+        assert!(
+            decode::<UdpDatagram>(&encoded[..encoded.len() - 1], (&datagram.session,)).is_err()
+        );
         let mut corrupt = encoded.clone();
         corrupt[UDP_CHECKSUM_OFFSET] ^= 1;
-        assert!(UdpDatagram::decode(&corrupt, &datagram.session).is_err());
+        assert!(decode::<UdpDatagram>(&corrupt, (&datagram.session,)).is_err());
         assert!(!valid_datagram(&encoded, 0x9999));
+    }
+
+    #[test]
+    fn udp_wire_limit_and_trailing_bytes_are_enforced() {
+        let mut datagram = UdpDatagram {
+            kind: PacketType::Unknown(0xe7),
+            session: 0x1234,
+            sequence: 0xabcd,
+            payload: vec![0x5a; usize::from(UDP_LENGTH_MASK) - UDP_HEADER],
+        };
+        let bytes = encode(&datagram).unwrap();
+        assert_eq!(bytes.len(), usize::from(UDP_LENGTH_MASK));
+        assert!(valid_datagram(&bytes, datagram.session));
+        assert_eq!(
+            decode::<UdpDatagram>(&bytes, (&datagram.session,)).unwrap(),
+            datagram
+        );
+        for length in 0..UDP_HEADER {
+            assert!(decode::<UdpDatagram>(&bytes[..length], (&datagram.session,)).is_err());
+        }
+        let mut trailing = bytes;
+        trailing.push(0);
+        assert!(!valid_datagram(&trailing, datagram.session));
+        assert!(decode::<UdpDatagram>(&trailing, (&datagram.session,)).is_err());
+        datagram.payload.push(0);
+        assert!(matches!(encode(&datagram), Err(Error::LimitExceeded(_))));
     }
 }

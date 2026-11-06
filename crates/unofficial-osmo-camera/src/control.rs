@@ -1,5 +1,19 @@
+use crate::protocol::binrw_error;
+use crate::protocol::encode;
 use crate::{Error, Result, protocol::*};
+use binrw::{BinRead, BinResult, Endian};
 use std::collections::VecDeque;
+use std::io::{Read, Seek};
+
+#[binrw::binread]
+#[br(little)]
+struct ControlAckHeader {
+    #[br(temp)]
+    _windows: [u8; CONTROL_ACK_OFFSET],
+    left: u16,
+    right: u16,
+    count: u16,
+}
 
 #[derive(Debug)]
 pub struct ControlAck {
@@ -12,32 +26,55 @@ impl ControlAck {
         if payload.len() < ACK_LIST {
             return Err(Error::Protocol("Truncated control ACK"));
         }
-        let left = u16_at(payload, CONTROL_ACK_OFFSET);
-        let right = u16_at(payload, CONTROL_ACK_OFFSET + RIGHT);
-        let count = usize::from(u16_at(payload, ACK_COUNT));
+        Self::read_options(
+            &mut std::io::Cursor::new(payload),
+            Endian::Little,
+            (&encoding,),
+        )
+        .map_err(|source| codec_error("decode", source))
+    }
+}
+
+impl BinRead for ControlAck {
+    type Args<'a> = (&'a AckEncoding,);
+
+    fn read_options<R: Read + Seek>(
+        reader: &mut R,
+        _: Endian,
+        (encoding,): Self::Args<'_>,
+    ) -> BinResult<Self> {
+        let pos = reader.stream_position()?;
+        let header = ControlAckHeader::read_options(reader, Endian::Little, ())?;
+        let left = header.left;
+        let right = header.right;
+        let count = usize::from(header.count);
         if distance(left, right) > CONTROL_CAPACITY || count > usize::from(CONTROL_CAPACITY) {
-            return Err(Error::Protocol("Control ACK exceeds capacity"));
+            return Err(binrw_error(
+                pos,
+                Error::Protocol("Control ACK exceeds capacity"),
+            ));
         }
         let mut missing = Vec::new();
-        let end = match encoding {
+        match encoding {
             AckEncoding::List => {
-                let end = ACK_LIST + count * WORD;
-                if payload.len() < end {
-                    return Err(Error::Protocol("Truncated ACK list"));
-                }
-                for i in 0..count {
-                    missing.push(u16_at(payload, ACK_LIST + i * WORD));
-                }
-                end
+                missing = Vec::<u16>::read_options(
+                    reader,
+                    Endian::Little,
+                    binrw::VecArgs { count, inner: () },
+                )?;
             }
             AckEncoding::Compressed => {
-                let end = ACK_BITMAP + count.div_ceil(ACK_STATES_PER_BYTE);
-                if payload.len() < end {
-                    return Err(Error::Protocol("Truncated ACK bitmap"));
-                }
-                let displacement = u16_at(payload, ACK_DISPLACEMENT);
+                let displacement = u16::read_options(reader, Endian::Little, ())?;
+                let bitmap = Vec::<u8>::read_options(
+                    reader,
+                    Endian::Little,
+                    binrw::VecArgs {
+                        count: count.div_ceil(ACK_STATES_PER_BYTE),
+                        inner: (),
+                    },
+                )?;
                 for i in 0..count {
-                    let state = (payload[ACK_BITMAP + i / ACK_STATES_PER_BYTE]
+                    let state = (bitmap[i / ACK_STATES_PER_BYTE]
                         >> (ACK_STATE_BITS * (i % ACK_STATES_PER_BYTE)))
                         & ACK_STATE_MASK;
                     if state != ACK_RECEIVED {
@@ -48,20 +85,28 @@ impl ControlAck {
                         missing.push((index << SEQUENCE_SHIFT) | (u16::from(state) << RETRY_SHIFT));
                     }
                 }
-                end
             }
-        };
-        if payload.len() < end + WORD
-            || usize::from(u16_at(payload, end)) > payload.len() - end - WORD
-        {
-            return Err(Error::Protocol("Truncated embedded ACK data"));
+        }
+        let embedded_length = u16::read_options(reader, Endian::Little, ())?;
+        let copied = std::io::copy(
+            &mut reader.take(u64::from(embedded_length)),
+            &mut std::io::sink(),
+        )?;
+        if copied != u64::from(embedded_length) {
+            return Err(binrw_error(
+                pos,
+                Error::Protocol("Truncated embedded ACK data"),
+            ));
         }
         let mut previous = 0;
         for (i, record) in missing.iter().enumerate() {
             let position = distance(left, *record);
             if position <= previous || position > distance(left, right) || (i == 0 && position != 1)
             {
-                return Err(Error::Protocol("Invalid ordered control ACK gaps"));
+                return Err(binrw_error(
+                    pos,
+                    Error::Protocol("Invalid ordered control ACK gaps"),
+                ));
             }
             previous = position;
         }
@@ -112,26 +157,18 @@ impl ControlSender {
         distance(self.left, self.right) < CONTROL_CAPACITY
     }
     fn routing(&self, right: u16, counter: u8, retry: Option<u16>) -> Vec<u8> {
-        let mut header = vec![0; ROUTING_LENGTH];
-        put16(&mut header, LEFT, self.left);
-        put16(&mut header, RIGHT, right);
-        put16(
-            &mut header,
-            FIRST_RETRY,
-            retry
+        let window = SenderWindow {
+            left: self.left,
+            right,
+            first_retry: retry
                 .filter(|s| RetryPhase::of(*s) == RetryPhase::First)
                 .map_or(self.first_retry, |s| (s & INDEX_BITS) | RETRY_MARKER),
-        );
-        put16(
-            &mut header,
-            SECOND_RETRY,
-            retry
+            second_retry: retry
                 .filter(|s| RetryPhase::of(*s) == RetryPhase::Second)
                 .map_or(self.second_retry, |s| (s & INDEX_BITS) | RETRY_MARKER),
-        );
-        header[ROUTING_COUNTER] = counter;
-        header[ROUTING_CHANNEL] = CONTROL_CHANNEL;
-        header
+        };
+        encode(&(window, counter, CONTROL_CHANNEL, [0u8; 2]))
+            .expect("fixed routing header encodes into memory")
     }
     pub fn send(&mut self, message: Message, session: u16) -> Result<Vec<u8>> {
         if !self.can_send() {
@@ -142,7 +179,7 @@ impl ControlSender {
         let sequence = next_sequence(self.right);
         self.counter = self.counter.wrapping_add(1);
         let mut payload = self.routing(sequence, self.counter, None);
-        payload.extend(message.encode()?);
+        payload.extend(encode(&message)?);
         let packet = datagram(PacketType::RoutedCommand, session, sequence, &payload)?;
         self.pending.push_back(Pending {
             sequence,
@@ -192,7 +229,7 @@ impl ControlSender {
                         retries.push((
                             pending.sequence,
                             pending.counter,
-                            pending.message.encode()?,
+                            encode(&pending.message)?,
                         ));
                     }
                 }

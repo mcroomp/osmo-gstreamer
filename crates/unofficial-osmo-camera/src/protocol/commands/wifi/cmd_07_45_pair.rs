@@ -1,28 +1,23 @@
 //! Application pairing and raw BLE pairing-arm body.
 
-use crate::{
-    Error, Result,
-    protocol::{WireDecode, WireEncode, WireReader, WireWriter, commands::reply::CameraRawData},
-};
-use num_enum::{FromPrimitive, IntoPrimitive};
+use crate::{Error, protocol::commands::reply::CameraRawData};
+use binrw::{BinRead, BinWrite};
 
 use super::packed_string::write_packed_string;
 
 pub const PAIRING_ID: u16 = 0x8092;
-const PAIRING_ARM_PREFIX: u8 = 1;
-const PAIRING_ARM_UNKNOWN: u8 = 0;
 const CLIENT_NAME: &str = "osmo";
 const MAX_PAIRING_IDENTITY_BYTES: usize = 32;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, IntoPrimitive)]
-#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
 pub enum PairingState {
     /// State 1, accepted by the current pairing workflow.
-    Approved = 1,
+    #[brw(magic = 1u8)]
+    Approved,
     /// State 2; continue waiting rather than treating it as completion.
-    AwaitingApproval = 2,
+    #[brw(magic = 2u8)]
+    AwaitingApproval,
     /// Other raw states, including 5/6; never treated as approval.
-    #[num_enum(catch_all)]
     Unknown(u8),
 }
 
@@ -44,26 +39,20 @@ pub enum PairingState {
 /// Nano pairing limits the identity to 32 encoded bytes; the client name is
 /// the library's fixed `osmo` label, not a requirement inferred for all peers.
 /// A state reply is distinct from a later decision notification or its receipt.
+#[binrw::binwrite]
+#[bw(assert(identity.len() <= MAX_PAIRING_IDENTITY_BYTES, Error::InvalidConfig {
+    field: "pairing identity", reason: "must not exceed 32 UTF-8 bytes",
+}))]
 pub struct PairingRequest<'a> {
+    #[bw(write_with = write_packed_string)]
     pub identity: &'a str,
+    #[bw(calc = (4u8, CLIENT_NAME.as_bytes()))]
+    client_name: (u8, &'static [u8]),
 }
 
 impl std::fmt::Debug for PairingRequest<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("PairingRequest { identity: [REDACTED] }")
-    }
-}
-
-impl WireEncode for PairingRequest<'_> {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        if self.identity.len() > MAX_PAIRING_IDENTITY_BYTES {
-            return Err(Error::InvalidConfig {
-                field: "pairing identity",
-                reason: "must not exceed 32 UTF-8 bytes",
-            });
-        }
-        write_packed_string(self.identity, writer)?;
-        write_packed_string(CLIENT_NAME, writer)
     }
 }
 
@@ -77,26 +66,10 @@ impl WireEncode for PairingRequest<'_> {
 /// ```
 ///
 /// Unknown states are retained, not treated as approval.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, BinRead, BinWrite)]
 pub struct PairingResponse {
     pub state: PairingState,
     pub extension: CameraRawData,
-}
-
-impl WireDecode for PairingResponse {
-    fn read_from(reader: &mut WireReader<'_>, context: &()) -> Result<Self> {
-        Ok(Self {
-            state: PairingState::read_from(reader, context)?,
-            extension: CameraRawData::read_from(reader, context)?,
-        })
-    }
-}
-
-impl WireEncode for PairingResponse {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        self.state.write_to(writer)?;
-        self.extension.write_to(writer)
-    }
 }
 
 /// Arm pairing using the raw BLE characteristic, not a DUML command.
@@ -107,38 +80,30 @@ impl WireEncode for PairingResponse {
 /// characteristic_write { unknown_prefix: u8 = 0x01, unknown: u8 = 0x00 }
 /// reply { bytes: [u8; remaining] | no application reply defined }
 /// ```
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, BinWrite)]
+#[bw(magic = b"\x01\x00")]
 pub struct BlePairingArmRequest;
-
-impl WireEncode for BlePairingArmRequest {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        writer.write_u8(PAIRING_ARM_PREFIX);
-        writer.write_u8(PAIRING_ARM_UNKNOWN);
-        Ok(())
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::encode;
 
     #[test]
     fn pairing_identity_limit_counts_encoded_bytes() {
         for identity in ["x".repeat(32), "\u{00e9}".repeat(16)] {
-            let bytes = PairingRequest {
+            let bytes = encode(&PairingRequest {
                 identity: &identity,
-            }
-            .encode()
+            })
             .unwrap();
             assert_eq!(bytes[0], 32);
             assert_eq!(bytes.len(), 38);
         }
         for identity in ["x".repeat(33), "\u{00e9}".repeat(17)] {
             assert!(
-                PairingRequest {
+                encode(&PairingRequest {
                     identity: &identity
-                }
-                .encode()
+                })
                 .is_err()
             );
         }

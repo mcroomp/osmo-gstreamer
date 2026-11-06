@@ -1,15 +1,12 @@
 //! Encoding-only stream and LCD output variants for camera command 0x02/0x4C.
 
-use crate::{
-    Result,
-    protocol::{WireEncode, WireWriter},
-};
-use num_enum::{IntoPrimitive, TryFromPrimitive};
+use binrw::{BinRead, BinWrite};
 
 /// Stream-output labels; pixel dimensions and frame rates remain unresolved.
 ///
 /// These identifiers do not share the LCD-output namespace.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, IntoPrimitive, TryFromPrimitive)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinWrite, BinRead)]
+#[brw(repr = u8)]
 #[repr(u8)]
 pub enum LiveViewStreamFormat {
     Auto = 0,
@@ -20,7 +17,8 @@ pub enum LiveViewStreamFormat {
 }
 
 /// LCD-output labels, not stream-resolution identifiers or guaranteed support.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, IntoPrimitive, TryFromPrimitive)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinWrite, BinRead)]
+#[brw(repr = u8)]
 #[repr(u8)]
 pub enum LcdOutputFormat {
     Auto = 0,
@@ -37,37 +35,30 @@ pub enum LcdOutputFormat {
 ///
 /// The fixed bytes do not establish dimensions or bitrate. Reply layout,
 /// flags, model support and readback are unspecified. Encoding authorizes no write.
+#[binrw::binwrite]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[bw(magic = b"\x04\x00\x00")]
 pub struct LiveViewStreamOutputSet {
     pub format: LiveViewStreamFormat,
-}
-
-impl WireEncode for LiveViewStreamOutputSet {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        writer.write_bytes(&[4, 0, 0, self.format.into(), 0, 0x20]);
-        Ok(())
-    }
+    #[bw(calc = [0u8, 0x20])]
+    suffix: [u8; 2],
 }
 
 /// APP -> Camera | 0x02/0x4C | request: `[1, format, 0, 0, 0, 0]`.
 ///
 /// Receiver selection is model-dependent; flags, reply layout and support
 /// remain unspecified. This is not a read-only query or permission to write.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinWrite)]
+#[bw(magic = 1u8)]
 pub struct LcdOutputSet {
+    #[bw(pad_after = 4)]
     pub format: LcdOutputFormat,
-}
-
-impl WireEncode for LcdOutputSet {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        writer.write_bytes(&[1, self.format.into(), 0, 0, 0, 0]);
-        Ok(())
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::encode;
 
     #[test]
     fn live_view_encoders_never_become_approved_reads() {
@@ -84,42 +75,37 @@ mod tests {
         let fixtures = [
             (
                 CameraCommand::LiveViewSource,
-                LiveViewToggleRequest {
+                encode(&LiveViewToggleRequest {
                     gate: LiveViewGate::Enable,
-                }
-                .encode()
+                })
                 .unwrap(),
             ),
             (
                 CameraCommand::LiveViewSource,
-                LiveViewToggleRequest {
+                encode(&LiveViewToggleRequest {
                     gate: LiveViewGate::Disable,
-                }
-                .encode()
+                })
                 .unwrap(),
             ),
             (
                 CameraCommand::LiveViewQualitySet,
-                LiveViewQualitySet {
+                encode(&LiveViewQualitySet {
                     quality: LiveViewQuality::Normal,
-                }
-                .encode()
+                })
                 .unwrap(),
             ),
             (
                 CameraCommand::LiveViewOutputSet,
-                LiveViewStreamOutputSet {
+                encode(&LiveViewStreamOutputSet {
                     format: LiveViewStreamFormat::Auto,
-                }
-                .encode()
+                })
                 .unwrap(),
             ),
             (
                 CameraCommand::LiveViewOutputSet,
-                LcdOutputSet {
+                encode(&LcdOutputSet {
                     format: LcdOutputFormat::Auto,
-                }
-                .encode()
+                })
                 .unwrap(),
             ),
         ];

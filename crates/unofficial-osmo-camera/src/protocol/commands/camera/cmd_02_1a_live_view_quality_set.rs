@@ -1,13 +1,10 @@
 //! Encoding-only live-view quality payloads, distinct from recording quality.
 
-use crate::{
-    Result,
-    protocol::{WireEncode, WireWriter},
-};
-use num_enum::{IntoPrimitive, TryFromPrimitive};
+use binrw::{BinRead, BinWrite};
 
 /// Observed quality labels without a resolution, frame-rate or bitrate mapping.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, IntoPrimitive, TryFromPrimitive)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinWrite, BinRead)]
+#[brw(repr = u8)]
 #[repr(u8)]
 pub enum LiveViewQuality {
     Normal = 0,
@@ -19,14 +16,7 @@ pub enum LiveViewQuality {
 ///
 /// Reply layout, request flags, model support and readback are unspecified.
 /// This encoding-only type is not a read-only query and authorizes no writes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinWrite)]
 pub struct LiveViewQualitySet {
     pub quality: LiveViewQuality,
-}
-
-impl WireEncode for LiveViewQualitySet {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        writer.write_u8(self.quality.into());
-        Ok(())
-    }
 }

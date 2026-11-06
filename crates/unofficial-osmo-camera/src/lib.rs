@@ -15,6 +15,7 @@ mod error;
 mod installation_identity;
 pub mod preview;
 pub mod protocol;
+pub mod rtmp;
 mod session;
 #[cfg(test)]
 mod tests;
@@ -22,6 +23,7 @@ mod tests;
 pub use camera_profile::CameraProfile;
 pub use error::{Error, Result};
 pub use preview::AccessUnit;
+pub use rtmp::{RtmpConfig, StreamingResolution};
 pub use session::{
     CameraConfig, CameraSession, ControlSession, PreviewCancellation, PreviewCommandEvent,
 };

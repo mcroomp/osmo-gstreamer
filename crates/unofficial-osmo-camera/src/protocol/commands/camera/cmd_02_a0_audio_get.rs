@@ -83,7 +83,8 @@ camera_read_query!(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{WireDecode, WireEncode, commands::reply::CameraReadReply};
+    use crate::protocol::commands::reply::CameraReadReply;
+    use crate::protocol::{decode, encode};
 
     #[test]
     fn synthetic_audio_flags_gain_and_extensions_round_trip() {
@@ -92,8 +93,7 @@ mod tests {
         for flags in [0, 1, 2, 4, 8, 0x80, 0xff] {
             bytes[1 + AUDIO_FLAGS_OFFSET] = flags;
             bytes[1 + AUDIO_RECORDING_GAIN_OFFSET] = flags ^ 0xff;
-            let reply =
-                CameraReadReply::<CameraAudioData>::decode(&bytes, &CameraAudioGet).unwrap();
+            let reply = decode::<CameraReadReply<CameraAudioData>>(&bytes, ()).unwrap();
             let CameraReadReply::Accepted(value) = &reply else {
                 panic!("expected accepted audio");
             };
@@ -102,20 +102,14 @@ mod tests {
             assert_eq!(value.recording_gain_code(), flags ^ 0xff);
             assert_eq!(value.data_prefix().len(), AUDIO_PREFIX_LENGTH);
             assert_eq!(value.extension(), [0xa5, 0x5a]);
-            assert_eq!(reply.encode().unwrap(), bytes);
+            assert_eq!(encode(&reply).unwrap(), bytes);
         }
         for length in 0..=AUDIO_PREFIX_LENGTH {
-            assert!(
-                CameraReadReply::<CameraAudioData>::decode(&bytes[..length], &CameraAudioGet)
-                    .is_err()
-            );
+            assert!(decode::<CameraReadReply::<CameraAudioData>>(&bytes[..length], ()).is_err());
         }
         let rejected = b"\xdfsynthetic";
         assert_eq!(
-            CameraReadReply::<CameraAudioData>::decode(rejected, &CameraAudioGet)
-                .unwrap()
-                .encode()
-                .unwrap(),
+            encode(&decode::<CameraReadReply::<CameraAudioData>>(rejected, ()).unwrap()).unwrap(),
             rejected
         );
     }
@@ -126,13 +120,13 @@ mod tests {
         bytes[1..5].copy_from_slice(&[0x34, 0x12, 0x89, 0x7f]);
         bytes[9] = 0x1e;
         bytes[10..].copy_from_slice(&[0xa5; 18]);
-        let reply = CameraReadReply::<CameraAudioData>::decode(&bytes, &CameraAudioGet).unwrap();
+        let reply = decode::<CameraReadReply<CameraAudioData>>(&bytes, ()).unwrap();
         let CameraReadReply::Accepted(value) = &reply else {
             panic!("expected accepted audio");
         };
         assert_eq!(value.recording_gain_code(), 0x7f);
         assert_eq!(value.data_prefix().len(), 15);
         assert_eq!(value.extension(), [0xa5; 12]);
-        assert_eq!(reply.encode().unwrap(), bytes);
+        assert_eq!(encode(&reply).unwrap(), bytes);
     }
 }

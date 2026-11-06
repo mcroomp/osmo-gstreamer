@@ -1,3 +1,4 @@
+use crate::protocol::{decode, encode};
 use crate::{
     CameraOwnerLease, Error, PreviewReader, Result,
     control::ControlSender,
@@ -103,6 +104,8 @@ pub struct ControlSession {
     worker: Option<JoinHandle<Result<()>>>,
     preview_units: Arc<AtomicU64>,
     preview_commands: Arc<Mutex<Vec<PreviewCommandEvent>>>,
+    preview_requested: bool,
+    rtmp_requested: bool,
 }
 
 /// Sanitized lifecycle evidence. Payloads, identities and network data are not retained.
@@ -220,6 +223,8 @@ impl ControlSession {
             worker: Some(worker),
             preview_units,
             preview_commands,
+            preview_requested: false,
+            rtmp_requested: false,
         };
         match initialized.recv_timeout(STARTUP_TIMEOUT + TCP_TIMEOUT + REPLY_TIMEOUT) {
             Ok(Ok(())) => Ok(session),
@@ -265,12 +270,34 @@ impl ControlSession {
                 reason: "preview lifecycle requires explicit approval",
             });
         }
+        if self.rtmp_requested {
+            return Err(Error::InvalidState("stop RTMP before starting preview"));
+        }
+        self.preview_requested = true;
         self.exchange(ControlOperation::StartPreview).map(|_| ())
     }
 
     /// Restores normal camera mode without closing this control owner.
     pub fn stop_preview(&mut self) -> Result<()> {
-        self.exchange(ControlOperation::StopPreview).map(|_| ())
+        self.exchange(ControlOperation::StopPreview)?;
+        self.preview_requested = false;
+        Ok(())
+    }
+
+    pub(crate) fn rtmp_command(&mut self, request: ExplorationRequest, quits: bool) -> Result<()> {
+        if self.preview_requested {
+            return Err(Error::InvalidState("stop preview before changing RTMP"));
+        }
+        // A timeout can follow a real mode change, so retain the guard on failure.
+        self.rtmp_requested = true;
+        let reply = self
+            .exchange(ControlOperation::Request(request))?
+            .ok_or(Error::InvalidState("unexpected empty RTMP reply"))?;
+        reply.require_success()?;
+        if quits {
+            self.rtmp_requested = false;
+        }
+        Ok(())
     }
 
     /// Complete native access units assembled during this owner's preview.
@@ -308,14 +335,19 @@ impl ControlSession {
             receiver: query.receiver(),
             command: query.command(),
             flags: Flags::REQUEST,
-            payload: query.encode()?,
+            payload: encode(&query)?,
             timeout: query.timeout(),
         };
         let reply = self.request_raw(request, false, false)?;
-        <Q::Response as WireDecode<Q>>::decode(&reply.payload, &query)
+        decode::<Q::Response>(&reply.payload, query.response_args())
     }
 
     pub fn close(&mut self) -> Result<()> {
+        if self.rtmp_requested && self.worker.is_some() {
+            log::warn!(
+                "Closing control owner without confirmed RTMP stop; no automatic reconnect or mode changes"
+            );
+        }
         self.closing.store(true, Ordering::Release);
         match self.worker.take() {
             Some(worker) => worker.join().map_err(|_| Error::WorkerPanicked)?,
@@ -332,6 +364,167 @@ impl Drop for ControlSession {
         }
     }
 }
+
+#[cfg(test)]
+mod rtmp_api_tests {
+    use super::*;
+    use crate::{
+        RtmpConfig, StreamingResolution,
+        protocol::commands::media::{
+            cmd_02_8e_streaming_control::{self, MediaStreamingStateReply},
+            cmd_02_e1_broadcast_mode, cmd_08_78_streaming_settings,
+        },
+    };
+
+    fn mock_session(expected: Vec<(Command, Vec<u8>, Vec<u8>)>) -> ControlSession {
+        let (commands, work) = mpsc::sync_channel::<ControlWork>(1);
+        let closing = Arc::new(AtomicBool::new(false));
+        let worker_closing = closing.clone();
+        let worker = thread::spawn(move || {
+            let mut expected = VecDeque::from(expected);
+            while !worker_closing.load(Ordering::Acquire) {
+                match work.recv_timeout(Duration::from_millis(10)) {
+                    Ok(ControlWork {
+                        operation: ControlOperation::Request(request),
+                        response,
+                    }) => {
+                        let (command, payload, reply) =
+                            expected.pop_front().expect("unexpected request");
+                        assert_eq!(request.receiver, Endpoint::Media);
+                        assert_eq!(request.command, command);
+                        assert_eq!(request.flags, Flags::REQUEST);
+                        assert_eq!(request.payload, payload);
+                        assert_eq!(request.timeout, Duration::from_secs(10));
+                        let sent = request.message(123);
+                        response
+                            .send(Ok(Some(Message {
+                                sender: Endpoint::Media,
+                                receiver: sent.sender,
+                                flags: Flags::RESPONSE,
+                                payload: reply,
+                                ..sent
+                            })))
+                            .unwrap();
+                    }
+                    Ok(_) => panic!("unexpected lifecycle operation"),
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+            assert!(expected.is_empty(), "missing requests");
+            Ok(())
+        });
+        ControlSession {
+            commands,
+            stop: Arc::new(AtomicBool::new(false)),
+            closing,
+            worker: Some(worker),
+            preview_units: Arc::new(AtomicU64::new(0)),
+            preview_commands: Arc::new(Mutex::new(Vec::new())),
+            preview_requested: false,
+            rtmp_requested: false,
+        }
+    }
+
+    #[test]
+    fn explicit_rtmp_lifecycle_sends_only_the_requested_media_commands() {
+        let mut settings = vec![0, 38, 0, 10, 0xd0, 7, 0, 0, 0, 0, 0, 0, 27, 0];
+        settings.extend_from_slice(b"rtmp://example.invalid/live");
+        let mut session = mock_session(vec![
+            (cmd_02_e1_broadcast_mode::COMMAND, vec![0x1a], vec![0]),
+            (cmd_08_78_streaming_settings::COMMAND, settings, vec![0]),
+            (
+                cmd_02_8e_streaming_control::COMMAND,
+                vec![1, 1, 0x1a, 0, 1, 1, 0, 0],
+                vec![0],
+            ),
+            (
+                cmd_02_8e_streaming_control::COMMAND,
+                vec![0, 1, 0x1c, 0],
+                vec![0, 0, 1, 0x1c, 0, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8],
+            ),
+            (
+                cmd_02_8e_streaming_control::COMMAND,
+                vec![1, 1, 0x1a, 0, 1, 2, 0, 0],
+                vec![0],
+            ),
+        ]);
+        let config = RtmpConfig::new(
+            "rtmp://example.invalid/live",
+            StreamingResolution::FullHd1080,
+            2000,
+        )
+        .unwrap();
+        session.enable_rtmp(true).unwrap();
+        assert!(session.start_preview(true).is_err());
+        session.configure_rtmp(&config, true).unwrap();
+        session.start_rtmp(true).unwrap();
+        assert_eq!(
+            session.rtmp_state().unwrap(),
+            MediaStreamingStateReply::State([0, 1, 2, 3, 4, 5, 6, 7, 8])
+        );
+        session.stop_rtmp(true).unwrap();
+        assert!(!session.rtmp_requested);
+        session.close().unwrap();
+    }
+
+    #[test]
+    fn rtmp_requires_approval_and_does_not_mix_with_managed_preview() {
+        let mut session = mock_session(vec![]);
+        let config = RtmpConfig::new(
+            "rtmp://example.invalid/live",
+            StreamingResolution::Hd720,
+            1000,
+        )
+        .unwrap();
+        assert!(session.enable_rtmp(false).is_err());
+        assert!(session.configure_rtmp(&config, false).is_err());
+        assert!(session.start_rtmp(false).is_err());
+        assert!(session.stop_rtmp(false).is_err());
+        session.preview_requested = true;
+        assert!(session.enable_rtmp(true).is_err());
+        assert!(session.configure_rtmp(&config, true).is_err());
+        assert!(session.start_rtmp(true).is_err());
+        assert!(session.stop_rtmp(true).is_err());
+        assert!(!session.rtmp_requested);
+        session.close().unwrap();
+    }
+
+    #[test]
+    fn rejected_or_empty_rtmp_ack_is_an_error_and_keeps_the_mode_guard() {
+        for reply in [vec![0xd6], vec![]] {
+            let mut session =
+                mock_session(vec![(cmd_02_e1_broadcast_mode::COMMAND, vec![0x1a], reply)]);
+            assert!(matches!(
+                session.enable_rtmp(true),
+                Err(Error::CameraRejected { .. } | Error::InvalidReply { .. })
+            ));
+            assert!(session.rtmp_requested);
+            assert!(session.start_preview(true).is_err());
+            session.close().unwrap();
+        }
+    }
+
+    #[test]
+    fn closing_an_rtmp_owner_does_not_send_an_implicit_stop() {
+        let mut session = mock_session(vec![(
+            cmd_02_e1_broadcast_mode::COMMAND,
+            vec![0x1a],
+            vec![0],
+        )]);
+        session.enable_rtmp(true).unwrap();
+        session.close().unwrap();
+    }
+
+    #[test]
+    fn cancelled_rtmp_operation_sends_nothing() {
+        let mut session = mock_session(vec![]);
+        session.stop.store(true, Ordering::Release);
+        assert!(matches!(session.enable_rtmp(true), Err(Error::Cancelled)));
+        session.close().unwrap();
+    }
+}
+
 struct WorkerCompletion {
     reader: PreviewReader,
     finished: bool,
@@ -602,19 +795,22 @@ impl Link {
         log::debug!("TCP pairing socket connected");
         tcp.set_write_timeout(Some(TCP_TIMEOUT))
             .map_err(|error| Error::io("set the TCP write deadline", error))?;
-        tcp.write_all(
-            &Message::request(
-                Endpoint::Wifi,
-                PAIRING_ID,
-                Command::Wifi(WifiCommand::Pair),
-                &PairingRequest {
-                    identity: &identity,
-                }
-                .encode()?,
-            )
-            .encode()?,
-        )
-        .map_err(|error| Error::io("write the TCP pairing request", error))?;
+        let pairing = Message::request(
+            Endpoint::Wifi,
+            PAIRING_ID,
+            Command::Wifi(WifiCommand::Pair),
+            &encode(&PairingRequest {
+                identity: &identity,
+            })?,
+        );
+        let pairing_bytes = encode(&pairing)?;
+        tcp.write_all(&pairing_bytes)
+            .map_err(|error| Error::io("write the TCP pairing request", error))?;
+        log::debug!(
+            "LAN TCP send message: {} length={}",
+            pairing.diagnostic_metadata(),
+            pairing_bytes.len()
+        );
         let until = Instant::now() + PAIRING_DELAY;
         while Instant::now() < until {
             if stop.load(Ordering::Acquire) {
@@ -707,7 +903,9 @@ impl Link {
                 std::io::Error::new(std::io::ErrorKind::WriteZero, "partial UDP write"),
             ));
         }
-        if bytes[TYPE_OFFSET] == PacketType::RoutedCommand.to_wire_u8()
+        self.observe_packet(true, bytes);
+        if bytes[TYPE_OFFSET]
+            == encode(&PacketType::RoutedCommand).expect("one-byte enum encodes into memory")[0]
             && (self.preview_commands.is_some() || log::log_enabled!(log::Level::Debug))
         {
             for message in Message::scan(bytes) {
@@ -715,6 +913,27 @@ impl Link {
             }
         }
         Ok(())
+    }
+    fn observe_packet(&self, sent: bool, packet: &[u8]) {
+        if !log::log_enabled!(log::Level::Trace) {
+            return;
+        }
+        let direction = if sent { "send" } else { "receive" };
+        if packet.len() >= UDP_HEADER && valid_datagram(packet, self.session) {
+            log::trace!(
+                "LAN UDP {direction} packet: type={:#04x} length={} sequence={} elapsed_ms={}",
+                packet[TYPE_OFFSET],
+                packet.len(),
+                u16_at(packet, SEQUENCE_OFFSET),
+                self.opened_at.elapsed().as_millis()
+            );
+        } else {
+            log::trace!(
+                "LAN UDP {direction} packet: invalid_or_other_session=true length={} elapsed_ms={}",
+                packet.len(),
+                self.opened_at.elapsed().as_millis()
+            );
+        }
     }
     fn send_message(&mut self, message: Message) -> Result<()> {
         let deadline = Instant::now() + REPLY_TIMEOUT;
@@ -822,7 +1041,7 @@ impl Link {
         self.command(
             Endpoint::Presence,
             Command::Common(CommonCommand::AppPresence),
-            &AppPresenceRequest.encode()?,
+            &encode(&AppPresenceRequest)?,
         )?;
         self.last_presence = Instant::now();
         Ok(())
@@ -872,7 +1091,7 @@ impl Link {
         self.command_with_flags(
             Endpoint::DeviceInfo,
             Command::Common(CommonCommand::DeviceInfo),
-            &AppDeviceInfoResponse.encode()?,
+            &encode(&AppDeviceInfoResponse)?,
             Flags::RESPONSE,
         )?;
         self.pump(REGISTRATION_WINDOW)?;
@@ -887,7 +1106,7 @@ impl Link {
         self.command(
             Endpoint::Gimbal,
             Command::Gimbal(GimbalCommand::Initialize),
-            &GimbalInitializeRequest.encode()?,
+            &encode(&GimbalInitializeRequest)?,
         )?;
         self.pump(REGISTRATION_WINDOW)?;
         let mut playback = false;
@@ -898,17 +1117,16 @@ impl Link {
             let request = self.command(
                 Endpoint::Camera,
                 Command::Camera(CameraCommand::Playback),
-                &PlaybackRequest {
+                &encode(&PlaybackRequest {
                     mode: PlaybackMode::Enter,
-                }
-                .encode()?,
+                })?,
             )?;
             self.pump(PLAYBACK_WINDOW)?;
             for message in &self.backlog {
                 if message.sender == Endpoint::Camera
                     && message.receiver == Endpoint::App
                     && message.command == Command::Camera(CameraCommand::State)
-                    && CameraStateNotification::decode(&message.payload, &())
+                    && decode::<CameraStateNotification>(&message.payload, ())
                         .is_ok_and(|state| state.playback_mode_active())
                 {
                     playback = true;
@@ -931,22 +1149,21 @@ impl Link {
         self.request(
             Endpoint::Camera,
             Command::Camera(CameraCommand::Playback),
-            &PlaybackRequest {
+            &encode(&PlaybackRequest {
                 mode: PlaybackMode::Leave,
-            }
-            .encode()?,
+            })?,
         )?;
         self.request(
             Endpoint::Camera,
             Command::Camera(CameraCommand::LiveViewSource),
-            &LiveViewSourceRequest.encode()?,
+            &encode(&LiveViewSourceRequest)?,
         )?;
         self.preview = Some(PreviewReceiver::new(self.session));
         self.last_frame = Instant::now();
         self.request(
             Endpoint::LiveView,
             Command::LiveView(LiveViewCommand::StartTransmission),
-            &StartTransmissionRequest.encode()?,
+            &encode(&StartTransmissionRequest)?,
         )?;
         self.deadline = None;
         Ok(())
@@ -959,8 +1176,11 @@ impl Link {
             match self.udp.recv(&mut bytes) {
                 Ok(length) => {
                     let packet = &bytes[..length];
+                    self.observe_packet(false, packet);
                     if valid_datagram(packet, self.session)
-                        && packet[TYPE_OFFSET] == PacketType::Handshake.to_wire_u8()
+                        && packet[TYPE_OFFSET]
+                            == encode(&PacketType::Handshake)
+                                .expect("one-byte enum encodes into memory")[0]
                     {
                         self.encoding = AckEncoding::parse(
                             packet
@@ -999,11 +1219,12 @@ impl Link {
         self.flush_replies()
     }
     fn observe(&mut self, packet: &[u8]) -> Result<()> {
+        self.observe_packet(false, packet);
         if !valid_datagram(packet, self.session) {
             return Ok(());
         }
         let kind = packet[TYPE_OFFSET];
-        if kind == PacketType::Video.to_wire_u8() {
+        if kind == encode(&PacketType::Video).expect("one-byte enum encodes into memory")[0] {
             if let Some(preview) = &mut self.preview {
                 for unit in preview.feed(packet, Instant::now())? {
                     if unit.frame_number == 1 {
@@ -1044,7 +1265,8 @@ impl Link {
             }
             return Ok(());
         }
-        if kind == PacketType::StreamWindow.to_wire_u8() {
+        if kind == encode(&PacketType::StreamWindow).expect("one-byte enum encodes into memory")[0]
+        {
             if let Some(preview) = &mut self.preview {
                 preview.observe_window(&packet[UDP_HEADER..])?;
             }
@@ -1083,7 +1305,7 @@ impl Link {
                     Endpoint::DeviceInfo,
                     message.id,
                     Command::Common(CommonCommand::DeviceInfo),
-                    &AppDeviceInfoResponse.encode()?,
+                    &encode(&AppDeviceInfoResponse)?,
                 );
                 reply.flags = Flags::ACKNOWLEDGMENT;
                 if !self.sender.has_reply(&reply)
@@ -1105,6 +1327,13 @@ impl Link {
         Ok(())
     }
     fn observe_preview_command(&self, sent: bool, message: &Message, sequence: u16) -> Result<()> {
+        log::debug!(
+            "LAN UDP {} message: {} sequence={} elapsed_ms={}",
+            if sent { "send" } else { "receive" },
+            message.diagnostic_metadata(),
+            sequence,
+            self.opened_at.elapsed().as_millis()
+        );
         if ![
             Command::Gimbal(GimbalCommand::Initialize),
             Command::Camera(CameraCommand::Playback),
@@ -1115,6 +1344,16 @@ impl Link {
         {
             return Ok(());
         }
+        let status = if message.flags.is_response() {
+            message
+                .payload
+                .first()
+                .copied()
+                .map(|value| decode::<ResponseStatus>(&[value], ()))
+                .transpose()?
+        } else {
+            None
+        };
         log::debug!(
             "LAN preview {}: {:?} {:?}->{:?} id={:#06x} flags={:#04x} sequence={} payload_length={} status={:?} elapsed_ms={}",
             if sent { "send" } else { "receive" },
@@ -1125,11 +1364,7 @@ impl Link {
             message.flags.0,
             sequence,
             message.payload.len(),
-            if message.flags.is_response() {
-                message.payload.first().copied().map(ResponseStatus::from)
-            } else {
-                None
-            },
+            status,
             self.opened_at.elapsed().as_millis()
         );
         if let Some(events) = &self.preview_commands {
@@ -1148,11 +1383,7 @@ impl Link {
                 id: message.id,
                 flags: message.flags,
                 payload_length: message.payload.len(),
-                status: if message.flags.is_response() {
-                    message.payload.first().copied().map(ResponseStatus::from)
-                } else {
-                    None
-                },
+                status,
                 sequence,
             });
         }
@@ -1206,18 +1437,16 @@ impl Link {
         let restore = self.request(
             Endpoint::Camera,
             Command::Camera(CameraCommand::Playback),
-            &PlaybackRequest {
+            &encode(&PlaybackRequest {
                 mode: PlaybackMode::Enter,
-            }
-            .encode()?,
+            })?,
         );
         let release = self.request(
             Endpoint::Camera,
             Command::Camera(CameraCommand::Playback),
-            &PlaybackRequest {
+            &encode(&PlaybackRequest {
                 mode: PlaybackMode::Leave,
-            }
-            .encode()?,
+            })?,
         );
         self.preview = None;
         self.deadline = deadline;

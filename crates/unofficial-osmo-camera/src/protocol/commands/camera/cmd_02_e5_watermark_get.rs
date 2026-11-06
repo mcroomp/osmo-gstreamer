@@ -1,9 +1,9 @@
 //! Watermark GET payload.
+use binrw::{BinRead, BinWrite};
 
 use crate::{
     Error, Result,
     protocol::{
-        WireDecode, WireEncode, WireReader, WireWriter,
         commands::reply::{CameraRawData, camera_read_query},
         identity::{CameraCommand, Command},
     },
@@ -19,7 +19,8 @@ const WATERMARK_LIVE_VIEW_MASK: u8 = 0x04;
 /// Sequential data: `flags: le_u16, length: le_u16, opaque: u8,
 /// value: [u8; length]`, then any retained trailing bytes.
 /// Neither the value's encoding nor individual flag meanings are established.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, BinRead, BinWrite)]
+#[br(try_map = Self::from_raw)]
 pub struct CameraWatermarkData {
     raw: CameraRawData,
 }
@@ -35,11 +36,11 @@ impl CameraWatermarkData {
     }
 
     pub fn raw_flags_word(&self) -> u16 {
-        u16::from_le_bytes([self.raw.0[0], self.raw.0[1]])
+        crate::protocol::u16_at(&self.raw.0, 0)
     }
 
     pub fn value_length(&self) -> u16 {
-        u16::from_le_bytes([self.raw.0[2], self.raw.0[3]])
+        crate::protocol::u16_at(&self.raw.0, 2)
     }
 
     pub fn opaque_byte(&self) -> u8 {
@@ -80,9 +81,8 @@ impl CameraWatermarkData {
     }
 }
 
-impl<Q> WireDecode<Q> for CameraWatermarkData {
-    fn read_from(reader: &mut WireReader<'_>, query: &Q) -> Result<Self> {
-        let raw = CameraRawData::read_from(reader, query)?;
+impl CameraWatermarkData {
+    fn from_raw(raw: CameraRawData) -> Result<Self> {
         if raw.0.len() < WATERMARK_HEADER_LENGTH {
             return Err(Error::Protocol("truncated watermark metadata header"));
         }
@@ -91,12 +91,6 @@ impl<Q> WireDecode<Q> for CameraWatermarkData {
             return Err(Error::Protocol("truncated watermark metadata value"));
         }
         Ok(data)
-    }
-}
-
-impl WireEncode for CameraWatermarkData {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        self.raw.write_to(writer)
     }
 }
 
@@ -124,14 +118,15 @@ camera_read_query!(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{WireDecode, WireEncode, commands::reply::CameraReadReply};
+    use crate::protocol::commands::reply::CameraReadReply;
+    use crate::protocol::{decode, encode};
 
     #[test]
     fn synthetic_watermark_flags_and_tail_round_trip() {
-        let query = CameraWatermarkGet;
+        let _query = CameraWatermarkGet;
         for flags in [0, 1, 2, 4, 0x80, 0xff] {
             let bytes = [0, flags, 0xa5, 2, 0, 0x5a, 0x12, 0x34, 0xcc];
-            let reply = CameraReadReply::<CameraWatermarkData>::decode(&bytes, &query).unwrap();
+            let reply = decode::<CameraReadReply<CameraWatermarkData>>(&bytes, ()).unwrap();
             let CameraReadReply::Accepted(value) = &reply else {
                 panic!("expected accepted watermark");
             };
@@ -145,7 +140,7 @@ mod tests {
             assert_eq!(value.value(), [0x12, 0x34]);
             assert_eq!(value.trailing_bytes(), [0xcc]);
             assert_eq!(value.extension(), &bytes[2..]);
-            assert_eq!(reply.encode().unwrap(), bytes);
+            assert_eq!(encode(&reply).unwrap(), bytes);
         }
         for bytes in [
             &[][..],
@@ -155,7 +150,7 @@ mod tests {
             &[0, 1, 0, 1, 0, 0][..],
             &[0, 1, 0, 0xff, 0xff, 0][..],
         ] {
-            assert!(CameraReadReply::<CameraWatermarkData>::decode(bytes, &query).is_err());
+            assert!(decode::<CameraReadReply::<CameraWatermarkData>>(bytes, ()).is_err());
         }
         for bytes in [
             &[0, 0x80, 0, 0, 0, 0][..],
@@ -163,9 +158,7 @@ mod tests {
             &[0xdf, 0xa5, 0x5a][..],
         ] {
             assert_eq!(
-                CameraReadReply::<CameraWatermarkData>::decode(bytes, &query)
-                    .unwrap()
-                    .encode()
+                encode(&decode::<CameraReadReply::<CameraWatermarkData>>(bytes, ()).unwrap())
                     .unwrap(),
                 bytes
             );

@@ -9,10 +9,11 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use unofficial_osmo_camera::protocol::encode;
 use unofficial_osmo_camera::{
     AccessUnit, CameraProfile, CameraSession, Error as CameraError,
     protocol::{
-        ExplorationRequest, Flags, WireEncode,
+        ExplorationRequest, Flags,
         commands::camera::{
             cmd_02_1a_live_view_quality_set::{LiveViewQuality, LiveViewQualitySet},
             cmd_02_4c_live_view_output_set::{LiveViewStreamFormat, LiveViewStreamOutputSet},
@@ -171,7 +172,7 @@ fn remaining_trials(session: &mut CameraSession, data: &Arc<Mutex<Measurements>>
         apply(
             session,
             CameraCommand::LiveViewOutputSet,
-            LiveViewStreamOutputSet { format }.encode()?,
+            encode(&LiveViewStreamOutputSet { format })?,
         )?;
         measure(
             &format!("quality unchanged; output={format:?} requested"),
@@ -191,7 +192,7 @@ fn trials(session: &mut CameraSession, data: &Arc<Mutex<Measurements>>) -> Resul
         apply(
             session,
             CameraCommand::LiveViewQualitySet,
-            LiveViewQualitySet { quality }.encode()?,
+            encode(&LiveViewQualitySet { quality })?,
         )?;
         measure(
             &format!("quality={quality:?}; original output unknown"),
@@ -201,10 +202,9 @@ fn trials(session: &mut CameraSession, data: &Arc<Mutex<Measurements>>) -> Resul
     apply(
         session,
         CameraCommand::LiveViewQualitySet,
-        LiveViewQualitySet {
+        encode(&LiveViewQualitySet {
             quality: LiveViewQuality::Normal,
-        }
-        .encode()?,
+        })?,
     )?;
     for format in [
         LiveViewStreamFormat::Auto,
@@ -216,7 +216,7 @@ fn trials(session: &mut CameraSession, data: &Arc<Mutex<Measurements>>) -> Resul
         apply(
             session,
             CameraCommand::LiveViewOutputSet,
-            LiveViewStreamOutputSet { format }.encode()?,
+            encode(&LiveViewStreamOutputSet { format })?,
         )?;
         measure(
             &format!("quality=Normal requested; output={format:?}"),
@@ -226,10 +226,9 @@ fn trials(session: &mut CameraSession, data: &Arc<Mutex<Measurements>>) -> Resul
     apply(
         session,
         CameraCommand::LiveViewOutputSet,
-        LiveViewStreamOutputSet {
+        encode(&LiveViewStreamOutputSet {
             format: LiveViewStreamFormat::Auto,
-        }
-        .encode()?,
+        })?,
     )?;
     measure(
         "final Normal/Auto requested; not verified restoration",
@@ -350,6 +349,7 @@ fn probe(bytes: &[u8]) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::{decode, encode};
 
     #[test]
     fn delivered_fps_excludes_startup_and_does_not_use_nominal_caps() {

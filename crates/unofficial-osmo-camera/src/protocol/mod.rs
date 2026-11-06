@@ -5,16 +5,20 @@
 //! interpretations marked as candidates remain unverified for other models,
 //! firmware versions and modes. Unknown fields are preserved where supported.
 
+mod codec;
 pub mod commands;
 mod duml;
 mod exploration;
 pub mod identity;
 mod query;
 mod transport;
-mod wire;
 
+pub(crate) use codec::{binrw_error, codec_error};
+pub use codec::{decode, encode};
+#[cfg(feature = "ble")]
+pub(crate) use duml::DumlPrefix;
 pub use duml::*;
 pub use exploration::*;
 pub use query::*;
 pub use transport::*;
-pub use wire::{WireDecode, WireEncode, WireReader, WireU8, WireWriter};
+pub(crate) use transport::{DatagramHeader, SenderWindow};

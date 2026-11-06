@@ -32,21 +32,16 @@ impl CameraIntervalData {
 
     /// Low halfword of the raw LE32 value; no coarse time unit is implied.
     pub fn coarse_field(&self) -> u16 {
-        u16::from_le_bytes([self.raw_bytes()[2], self.raw_bytes()[3]])
+        crate::protocol::u16_at(self.raw_bytes(), 2)
     }
 
     /// High halfword of the raw LE32 value; no fine time unit is implied.
     pub fn fine_field(&self) -> u16 {
-        u16::from_le_bytes([self.raw_bytes()[4], self.raw_bytes()[5]])
+        crate::protocol::u16_at(self.raw_bytes(), 4)
     }
 
     pub fn raw_value(&self) -> u32 {
-        u32::from_le_bytes([
-            self.raw_bytes()[2],
-            self.raw_bytes()[3],
-            self.raw_bytes()[4],
-            self.raw_bytes()[5],
-        ])
+        crate::protocol::u32_at(self.raw_bytes(), 2)
     }
 }
 
@@ -74,15 +69,14 @@ camera_read_query!(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{WireDecode, WireEncode, commands::reply::CameraReadReply};
+    use crate::protocol::commands::reply::CameraReadReply;
+    use crate::protocol::{decode, encode};
 
     #[test]
     fn both_interval_prefix_variants_preserve_the_same_word_and_tail() {
         for prefix in [[0, 1], [0xfe, 0x80]] {
             let bytes = [0, prefix[0], prefix[1], 0x78, 0x56, 0x34, 0x12, 0xa5];
-            let reply =
-                CameraReadReply::<CameraIntervalData>::decode(&bytes, &CameraPhotoIntervalGet)
-                    .unwrap();
+            let reply = decode::<CameraReadReply<CameraIntervalData>>(&bytes, ()).unwrap();
             let CameraReadReply::Accepted(value) = &reply else {
                 panic!("expected accepted interval");
             };
@@ -90,7 +84,7 @@ mod tests {
             assert_eq!(value.raw_value(), 0x12345678);
             assert_eq!(value.coarse_field(), 0x5678);
             assert_eq!(value.fine_field(), 0x1234);
-            assert_eq!(reply.encode().unwrap(), bytes);
+            assert_eq!(encode(&reply).unwrap(), bytes);
         }
     }
 }

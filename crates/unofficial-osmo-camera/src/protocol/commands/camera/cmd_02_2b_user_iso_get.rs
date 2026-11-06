@@ -105,11 +105,12 @@ camera_read_query!(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{WireDecode, WireEncode, commands::reply::CameraReadReply};
+    use crate::protocol::commands::reply::CameraReadReply;
+    use crate::protocol::{decode, encode};
 
     #[test]
     fn iso_codes_keep_raw_aliases_and_offer_nano_labels() {
-        let query = CameraUserIsoGet;
+        let _query = CameraUserIsoGet;
         for (code, expected) in [
             (0x00, Some(NanoUserIso::Auto)),
             (0x01, Some(NanoUserIso::Iso100)),
@@ -119,14 +120,14 @@ mod tests {
             (0x0D, Some(NanoUserIso::Iso51200)),
             (0xFE, None),
         ] {
-            let reply = CameraReadReply::<CameraIsoCode>::decode(&[0, code, 0xAA], &query).unwrap();
+            let reply = decode::<CameraReadReply<CameraIsoCode>>(&[0, code, 0xAA], ()).unwrap();
             let CameraReadReply::Accepted(value) = reply else {
                 panic!("expected accepted ISO code");
             };
             assert_eq!(value.code(), code);
             assert_eq!(value.nano_value(), expected);
             assert_eq!(value.raw_bytes(), [code, 0xAA]);
-            assert_eq!(value.encode().unwrap(), [code, 0xAA]);
+            assert_eq!(encode(&value).unwrap(), [code, 0xAA]);
         }
         assert_eq!(NanoUserIso::Auto.iso_value(), None);
         assert_eq!(NanoUserIso::Iso6400.iso_value(), Some(6_400));

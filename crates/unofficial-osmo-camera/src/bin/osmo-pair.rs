@@ -1,5 +1,7 @@
 #[path = "osmo-pair/neighbors.rs"]
 mod neighbors;
+#[path = "osmo-pair/rtmp.rs"]
+mod rtmp;
 #[path = "osmo-pair/timing.rs"]
 mod timing;
 
@@ -20,13 +22,35 @@ const CREDENTIALS_DIRECTORY: &str = ".credentials";
 const DEFAULT_PROFILE: &str = "camera";
 const SMOKE_TEST_FRAMES: usize = 3;
 const SMOKE_TEST_FRAME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-const USAGE: &str = "Usage: osmo-pair [--camera PROFILE] [--smoke-test | --timing-test SECONDS (1-300)] [--lan-only]";
+const USAGE: &str = "\
+Usage: osmo-pair [--camera PROFILE]
+       osmo-pair [--camera PROFILE] [--smoke-test | --timing-test SECONDS (1-300)] [--lan-only]
+       osmo-pair [--camera PROFILE] --rtmp-setup URL [--rtmp-resolution 720|1080] [--rtmp-bitrate KBPS]
+       osmo-pair [--camera PROFILE] --rtmp-state
+       osmo-pair [--camera PROFILE] --rtmp-stop
+
+RTMP commands always perform full BLE pairing and saved Wi-Fi association first.
+--rtmp-setup explicitly approves broadcast mode, configuration and publication.
+Defaults: 720 size family, 2000 kbps (experimental; camera acceptance unverified).
+Publication remains running after setup; --rtmp-stop explicitly stops/quits.
+Mode changes can sever LAN control and affect recording; no automatic reconnect.
+Only use a destination/key you control. URL arguments may appear in process lists
+and shell history; the application does not print or save the URL.
+Run your RTMP receiver separately. --help displays this help without hardware access.";
 
 fn main() -> Result<(), Box<dyn Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format_timestamp_millis()
         .try_init()?;
-    let options = parse_options(std::env::args().skip(1))?;
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    if args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
+    {
+        println!("{USAGE}");
+        return Ok(());
+    }
+    let options = parse_options(args.into_iter())?;
     let credentials_dir = PathBuf::from(CREDENTIALS_DIRECTORY);
     let profile_path = credentials_dir.join(format!("{}.toml", options.profile_name));
     let (mut profile, legacy_files) =
@@ -36,9 +60,26 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let network = prompt_for_missing_network(&mut profile)?;
-    profile.save_to_file(&profile_path)?;
-    remove_migrated_files(&legacy_files)?;
+    if options.rtmp.is_some() {
+        eprintln!(
+            "RTMP operation: full BLE pairing and saved Wi-Fi association, then one LAN control connection."
+        );
+    }
+    associate_camera(&mut profile, &profile_path, &legacy_files)?;
+    if let Some(action) = &options.rtmp {
+        rtmp::run(&profile, action)?;
+    }
+    Ok(())
+}
+
+fn associate_camera(
+    profile: &mut CameraProfile,
+    profile_path: &Path,
+    legacy_files: &[PathBuf],
+) -> Result<(), Box<dyn Error>> {
+    let network = prompt_for_missing_network(profile)?;
+    profile.save_to_file(profile_path)?;
+    remove_migrated_files(legacy_files)?;
 
     eprintln!("Starting BLE pairing and camera Wi-Fi association.");
     eprintln!("Approve the pairing on the camera if prompted.");
@@ -47,16 +88,23 @@ fn main() -> Result<(), Box<dyn Error>> {
     config.network_cleanup = NetworkCleanup::Preserve;
     let mut session = BleSession::connect(config)?;
     profile.pairing_identity = Some(session.pairing_identity().to_owned());
-    profile.save_to_file(&profile_path)?;
-
-    let response = session.execute_query(WifiMacGet)?;
-    let mac = match response {
-        CameraReadReply::Accepted(response) => response.address,
-        CameraReadReply::Rejected { .. } => {
-            return Err("Camera rejected the Wi-Fi MAC address query.".into());
+    let result = (|| {
+        profile
+            .save_to_file(profile_path)
+            .map_err(|error| CameraError::io("save the paired camera profile", error))?;
+        match session.execute_query(WifiMacGet)? {
+            CameraReadReply::Accepted(response) => Ok(response.address),
+            CameraReadReply::Rejected { .. } => Err(CameraError::Protocol(
+                "camera rejected the Wi-Fi MAC address query",
+            )),
         }
+    })();
+    let closed = session.close();
+    let mac = match (result, closed) {
+        (Ok(mac), Ok(())) => mac,
+        (Err(primary), Err(cleanup)) => return Err(CameraError::cleanup(primary, cleanup).into()),
+        (Err(error), Ok(())) | (Ok(_), Err(error)) => return Err(error.into()),
     };
-    session.close()?;
 
     profile.wifi_mac = Some(format_mac(mac));
     println!("Camera Wi-Fi MAC: {}", profile.wifi_mac.as_deref().unwrap());
@@ -95,7 +143,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    profile.save_to_file(&profile_path)?;
+    profile.save_to_file(profile_path)?;
     println!(
         "Camera profile saved to {}. The camera remains on the configured network.",
         profile_path.display()
@@ -108,6 +156,7 @@ struct Options {
     smoke_test: bool,
     timing_seconds: Option<u64>,
     lan_only: bool,
+    rtmp: Option<rtmp::Action>,
 }
 
 fn parse_options(mut args: impl Iterator<Item = String>) -> Result<Options, Box<dyn Error>> {
@@ -116,8 +165,14 @@ fn parse_options(mut args: impl Iterator<Item = String>) -> Result<Options, Box<
         smoke_test: false,
         timing_seconds: None,
         lan_only: false,
+        rtmp: None,
     };
     let mut associate = false;
+    let mut resolution = unofficial_osmo_camera::StreamingResolution::Hd720;
+    let mut bitrate = 2000;
+    let mut rtmp_settings = false;
+    let mut rtmp_operation = None;
+    let mut rtmp_destination = None;
     while let Some(argument) = args.next() {
         match argument.as_str() {
             "--camera" => {
@@ -135,9 +190,54 @@ fn parse_options(mut args: impl Iterator<Item = String>) -> Result<Options, Box<
                 }
                 options.timing_seconds = Some(seconds);
             }
+            "--rtmp-setup" | "--rtmp-state" | "--rtmp-stop" => {
+                if rtmp_operation.is_some() {
+                    return Err("Select exactly one RTMP operation.".into());
+                }
+                if argument == "--rtmp-setup" {
+                    rtmp_destination = Some(args.next().ok_or("Missing RTMP URL.")?);
+                }
+                rtmp_operation = Some(argument);
+            }
+            "--rtmp-resolution" => {
+                resolution = match args.next().as_deref() {
+                    Some("720") => unofficial_osmo_camera::StreamingResolution::Hd720,
+                    Some("1080") => unofficial_osmo_camera::StreamingResolution::FullHd1080,
+                    _ => return Err("RTMP resolution must be 720 or 1080.".into()),
+                };
+                rtmp_settings = true;
+            }
+            "--rtmp-bitrate" => {
+                bitrate = args
+                    .next()
+                    .and_then(|value| value.parse::<u16>().ok())
+                    .filter(|value| *value != 0)
+                    .ok_or("RTMP bitrate must be an integer from 1 to 65535 kbps; supported range unverified.")?;
+                rtmp_settings = true;
+            }
             _ => return Err(USAGE.into()),
         }
     }
+    if rtmp_operation.is_some()
+        && (options.smoke_test || options.timing_seconds.is_some() || options.lan_only || associate)
+    {
+        return Err("RTMP operations cannot be combined with preview diagnostics, --lan-only or --associate.".into());
+    }
+    if rtmp_settings && rtmp_destination.is_none() {
+        return Err("RTMP resolution and bitrate require --rtmp-setup URL.".into());
+    }
+    options.rtmp = match rtmp_operation.as_deref() {
+        Some("--rtmp-setup") => Some(rtmp::Action::Setup(
+            unofficial_osmo_camera::RtmpConfig::new(
+                rtmp_destination.ok_or("Missing RTMP URL.")?,
+                resolution,
+                bitrate,
+            )?,
+        )),
+        Some("--rtmp-state") => Some(rtmp::Action::State),
+        Some("--rtmp-stop") => Some(rtmp::Action::Stop),
+        _ => None,
+    };
     if options.timing_seconds.is_some() && (options.smoke_test || associate) {
         return Err("Use --timing-test without --smoke-test or --associate.".into());
     }
@@ -232,14 +332,14 @@ fn smoke_test(mut session: CameraSession) -> Result<(), CameraError> {
 fn camera_config(profile: &CameraProfile) -> Result<CameraConfig, CameraError> {
     let host = profile.camera_ip.ok_or(CameraError::InvalidConfig {
         field: "camera profile",
-        reason: "preview diagnostics require camera_ip",
+        reason: "LAN operations require camera_ip",
     })?;
     let pairing_identity = profile
         .pairing_identity
         .clone()
         .ok_or(CameraError::InvalidConfig {
             field: "camera profile",
-            reason: "preview diagnostics require pairing_identity",
+            reason: "LAN operations require pairing_identity",
         })?;
     Ok(CameraConfig {
         host,
@@ -465,5 +565,110 @@ mod tests {
     #[test]
     fn formats_mac_without_secret_or_identity_data() {
         assert_eq!(format_mac([0x02, 0, 0, 0, 0, 0xab]), "02:00:00:00:00:AB");
+    }
+
+    #[test]
+    fn rtmp_options_select_operation_and_validate_settings_before_pairing() {
+        for flag in ["--rtmp-state", "--rtmp-stop"] {
+            let options = parse_options([flag.into()].into_iter()).unwrap();
+            assert!(options.rtmp.is_some());
+            assert!(!options.smoke_test);
+            assert!(!options.lan_only);
+        }
+        assert!(matches!(
+            parse_options(["--rtmp-state".into()].into_iter())
+                .unwrap()
+                .rtmp,
+            Some(rtmp::Action::State)
+        ));
+        assert!(matches!(
+            parse_options(["--rtmp-stop".into()].into_iter())
+                .unwrap()
+                .rtmp,
+            Some(rtmp::Action::Stop)
+        ));
+        for args in [
+            vec!["--rtmp-setup", "rtmp://example.invalid/live/synthetic-key"],
+            vec![
+                "--rtmp-resolution",
+                "1080",
+                "--camera",
+                "office",
+                "--rtmp-setup",
+                "rtmp://example.invalid/live/synthetic-key",
+                "--rtmp-bitrate",
+                "3000",
+            ],
+        ] {
+            let options = parse_options(args.into_iter().map(str::to_owned)).unwrap();
+            let Some(rtmp::Action::Setup(config)) = options.rtmp else {
+                panic!("expected RTMP setup");
+            };
+            assert!(!format!("{config:?}").contains("synthetic-key"));
+        }
+        for args in [
+            vec!["--rtmp-setup"],
+            vec!["--rtmp-setup", "https://example.invalid/synthetic-key"],
+            vec!["--rtmp-resolution", "720"],
+            vec!["--rtmp-state", "--rtmp-bitrate", "2000"],
+            vec!["--rtmp-stop", "--rtmp-resolution", "1080"],
+            vec![
+                "--rtmp-setup",
+                "rtmp://example.invalid/live",
+                "--rtmp-resolution",
+                "4k",
+            ],
+            vec![
+                "--rtmp-setup",
+                "rtmp://example.invalid/live",
+                "--rtmp-bitrate",
+                "0",
+            ],
+            vec![
+                "--rtmp-setup",
+                "rtmp://example.invalid/live",
+                "--rtmp-bitrate",
+                "65536",
+            ],
+            vec![
+                "--rtmp-setup",
+                "rtmp://example.invalid/live",
+                "--rtmp-bitrate",
+                "invalid",
+            ],
+        ] {
+            let error = parse_options(args.into_iter().map(str::to_owned))
+                .err()
+                .unwrap();
+            assert!(!error.to_string().contains("synthetic-key"));
+        }
+    }
+
+    #[test]
+    fn rtmp_rejects_mixed_operations_in_either_argument_order() {
+        for operation in ["--rtmp-state", "--rtmp-stop", "--rtmp-setup"] {
+            let mut action = vec![operation];
+            if operation == "--rtmp-setup" {
+                action.push("rtmp://example.invalid/live");
+            }
+            for other in [
+                "--smoke-test",
+                "--timing-test",
+                "--lan-only",
+                "--associate",
+                "--rtmp-stop",
+            ] {
+                let mut conflict = vec![other];
+                if other == "--timing-test" {
+                    conflict.push("5");
+                }
+                for args in [
+                    [action.clone(), conflict.clone()].concat(),
+                    [conflict, action.clone()].concat(),
+                ] {
+                    assert!(parse_options(args.into_iter().map(str::to_owned)).is_err());
+                }
+            }
+        }
     }
 }
