@@ -1,10 +1,7 @@
 //! Wi-Fi role-setting request.
 
 use super::cmd_07_39_get_role::WifiRole;
-use crate::{
-    Result,
-    protocol::{WireEncode, WireWriter},
-};
+use binrw::BinWrite;
 
 /// Select camera hotspot or station mode.
 ///
@@ -19,13 +16,7 @@ use crate::{
 /// receipt, not that the radio changed mode; this request performs no readback
 /// of association or IP configuration. The compatibility encoder exposes only
 /// roles 0/1, not every possible device role.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, BinWrite)]
 pub struct WifiRoleSetRequest {
     pub role: WifiRole,
-}
-
-impl WireEncode for WifiRoleSetRequest {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        self.role.write_to(writer)
-    }
 }

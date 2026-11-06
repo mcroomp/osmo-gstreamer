@@ -1,10 +1,5 @@
 //! Fixed-size device identification response payload.
 
-use crate::{
-    Result,
-    protocol::{WireEncode, WireWriter},
-};
-
 pub const DEVICE_INFO_LENGTH: usize = 62;
 pub const DEVICE_NAME_OFFSET: usize = 1;
 pub const DEVICE_NAME: &[u8] = b"APP";
@@ -29,18 +24,15 @@ pub const DEVICE_UNKNOWN_FIELDS: [(usize, u8); 3] = [(41, 2), (50, 2), (51, 8)];
 /// This is the application reply body, not the camera's device-info layout.
 /// UDP registration uses response flags 0x80; BLE acknowledgment of an inbound
 /// request uses 0xC0 and reverses the request endpoints. The body is identical.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, binrw::BinWrite)]
+#[bw(map = |_: &Self| device_info_bytes())]
 pub struct AppDeviceInfoResponse;
 
-impl WireEncode for AppDeviceInfoResponse {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        let mut bytes = vec![0; DEVICE_INFO_LENGTH];
-        bytes[DEVICE_NAME_OFFSET..DEVICE_NAME_OFFSET + DEVICE_NAME.len()]
-            .copy_from_slice(DEVICE_NAME);
-        for (offset, value) in DEVICE_UNKNOWN_FIELDS {
-            bytes[offset] = value;
-        }
-        writer.write_bytes(&bytes);
-        Ok(())
+fn device_info_bytes() -> [u8; DEVICE_INFO_LENGTH] {
+    let mut bytes = [0; DEVICE_INFO_LENGTH];
+    bytes[DEVICE_NAME_OFFSET..DEVICE_NAME_OFFSET + DEVICE_NAME.len()].copy_from_slice(DEVICE_NAME);
+    for (offset, value) in DEVICE_UNKNOWN_FIELDS {
+        bytes[offset] = value;
     }
+    bytes
 }

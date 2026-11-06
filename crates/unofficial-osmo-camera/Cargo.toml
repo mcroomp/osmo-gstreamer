@@ -30,7 +30,6 @@ ble = [
 ]
 
 [dependencies]
-num_enum = "0.7.6"
 socket2 = "0.6"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
@@ -43,6 +42,7 @@ tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net"], opt
 uuid = { version = "1", features = ["v4"], optional = true }
 rpassword = { version = "7", optional = true }
 env_logger = { version = "0.11", optional = true }
+binrw = "0.15.2"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", optional = true, features = [

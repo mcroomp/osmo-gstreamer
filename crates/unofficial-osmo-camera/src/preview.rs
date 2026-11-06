@@ -1,3 +1,4 @@
+use crate::protocol::decode;
 use crate::{Error, Result, protocol::*};
 use std::{collections::BTreeMap, time::Instant};
 
@@ -23,14 +24,14 @@ struct Fragment {
 }
 impl Fragment {
     fn parse(bytes: &[u8], session: u16) -> Result<Self> {
-        if bytes.len() < VIDEO_PAYLOAD
-            || bytes.len() > MAX_DATAGRAM
-            || !valid_datagram(bytes, session)
-            || bytes[TYPE_OFFSET] != PacketType::Video.to_wire_u8()
-        {
+        if bytes.len() < VIDEO_PAYLOAD || bytes.len() > MAX_DATAGRAM {
             return Err(Error::Protocol("Invalid video datagram"));
         }
-        let fec = u32_at(bytes, FEC_OFFSET);
+        let header = DatagramHeader::parse(bytes, session)?;
+        if header.kind != PacketType::Video {
+            return Err(Error::Protocol("Invalid video datagram"));
+        }
+        let (_, fec) = decode::<(SenderWindow, u32)>(&bytes[UDP_HEADER..VIDEO_PAYLOAD], ())?;
         let mut length = bytes.len() - VIDEO_PAYLOAD;
         if fec & FEC_ENABLED != 0 {
             let count = (fec >> FEC_COUNT_SHIFT) & FEC_FIELD_MASK;
@@ -53,7 +54,7 @@ impl Fragment {
             }
         }
         Ok(Self {
-            sequence: u16_at(bytes, SEQUENCE_OFFSET),
+            sequence: header.sequence,
             fec,
             payload: bytes[VIDEO_PAYLOAD..VIDEO_PAYLOAD + length].to_vec(),
         })
@@ -65,10 +66,32 @@ impl Fragment {
     }
 }
 
-fn envelope_header(bytes: &[u8]) -> bool {
-    bytes.len() >= ENVELOPE_HEADER
-        && bytes[..ENVELOPE_PREFIX.len()] == ENVELOPE_PREFIX
-        && bytes[..ENVELOPE_CHECKSUM].iter().fold(0, |a, b| a ^ b) == bytes[ENVELOPE_CHECKSUM]
+#[derive(binrw::BinRead)]
+#[br(little)]
+struct MediaEnvelopeHeader {
+    prefix: [u8; 4],
+    length: u32,
+    extension: u8,
+    kind: u8,
+    _unmapped: u8,
+    checksum: u8,
+}
+
+impl MediaEnvelopeHeader {
+    fn parse(bytes: &[u8]) -> Result<Self> {
+        let header_bytes = bytes
+            .get(..ENVELOPE_HEADER)
+            .ok_or(Error::Protocol("Truncated media envelope header"))?;
+        let header = decode::<Self>(header_bytes, ())?;
+        if header.prefix != ENVELOPE_PREFIX
+            || bytes[..ENVELOPE_CHECKSUM].iter().fold(0, |a, b| a ^ b) != header.checksum
+        {
+            return Err(Error::Protocol(
+                "Media envelope desynchronized; refusing to skip compressed pictures",
+            ));
+        }
+        Ok(header)
+    }
 }
 
 #[derive(Default)]
@@ -88,18 +111,14 @@ impl Envelopes {
         let mut packets = Vec::new();
         while self.bytes.len() - cursor >= ENVELOPE_HEADER {
             let header = &self.bytes[cursor..];
-            if !envelope_header(header) {
-                return Err(Error::Protocol(
-                    "Media envelope desynchronized; refusing to skip compressed pictures",
-                ));
-            }
-            let length = u32_at(header, ENVELOPE_LENGTH) as usize;
+            let fields = MediaEnvelopeHeader::parse(header)?;
+            let length = fields.length as usize;
             if length > MAX_MEDIA {
                 return Err(Error::LimitExceeded("Media envelope exceeds 2 MiB limit"));
             }
-            let extended = header[ENVELOPE_EXTENSION] & EXTENSION_MASK == EXTENSION_MARKER;
+            let extended = fields.extension & EXTENSION_MASK == EXTENSION_MARKER;
             let header_length = if extended {
-                usize::from(header[ENVELOPE_EXTENSION] & EXTENSION_LENGTH_MASK)
+                usize::from(fields.extension & EXTENSION_LENGTH_MASK)
             } else {
                 ENVELOPE_HEADER
             };
@@ -113,11 +132,11 @@ impl Envelopes {
                 break;
             }
             let metadata = if extended {
-                u32_at(header, ENVELOPE_HEADER)
+                decode::<u32>(&header[ENVELOPE_HEADER..METADATA_HEADER], ())?
             } else {
                 0
             };
-            match MediaType::try_from(header[ENVELOPE_TYPE])? {
+            match decode::<MediaType>(&[fields.kind], ())? {
                 MediaType::Video => packets.push((
                     metadata,
                     header[header_length..header_length + length].to_vec(),
@@ -370,8 +389,9 @@ impl PreviewReceiver {
         let Some(next) = self.next else {
             return Ok(());
         };
-        let left = u16_at(window, LEFT);
-        let right = u16_at(window, RIGHT);
+        let window = decode::<SenderWindow>(&window[..WINDOW_LENGTH], ())?;
+        let left = window.left;
+        let right = window.right;
         if distance(left, right) > VIDEO_CAPACITY || distance(left, next) > VIDEO_CAPACITY {
             return Ok(());
         }
@@ -389,11 +409,10 @@ impl PreviewReceiver {
                     .get(&sequence)
                     .copied()
                     .unwrap_or(RetryPhase::Initial);
-                for (offset, from, to) in [
-                    (FIRST_RETRY, RetryPhase::Initial, RetryPhase::First),
-                    (SECOND_RETRY, RetryPhase::First, RetryPhase::Second),
+                for (marker, from, to) in [
+                    (window.first_retry, RetryPhase::Initial, RetryPhase::First),
+                    (window.second_retry, RetryPhase::First, RetryPhase::Second),
                 ] {
-                    let marker = u16_at(window, offset);
                     if phase == from
                         && marker & RETRY_MARKER != 0
                         && distance(sequence, marker) < VIDEO_CAPACITY
@@ -427,7 +446,7 @@ impl PreviewReceiver {
     fn feed_inner(&mut self, bytes: &[u8], received_at: Instant) -> Result<Vec<AccessUnit>> {
         let fragment = Fragment::parse(bytes, self.session)?;
         if self.next.is_none() {
-            if fragment.parity() || !envelope_header(&fragment.payload) {
+            if fragment.parity() || MediaEnvelopeHeader::parse(&fragment.payload).is_err() {
                 return Ok(Vec::new());
             }
             self.next = Some(fragment.sequence & INDEX_BITS);

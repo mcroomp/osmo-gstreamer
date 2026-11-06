@@ -37,6 +37,12 @@ pub enum Error {
     },
     #[error("Invalid camera protocol data: {0}")]
     Protocol(&'static str),
+    #[error("Could not {operation} binary protocol value")]
+    WireCodec {
+        operation: &'static str,
+        #[source]
+        source: Arc<binrw::Error>,
+    },
     #[error("Unsupported camera feature: {0}")]
     Unsupported(&'static str),
     #[error("Unsupported {field}: {value:#04x}")]
@@ -109,6 +115,7 @@ impl From<std::convert::Infallible> for Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use std::error::Error as _;
 
     #[test]

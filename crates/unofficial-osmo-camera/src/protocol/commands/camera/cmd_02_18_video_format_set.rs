@@ -1,17 +1,18 @@
 //! Recording-format codecs for camera command 0x02/0x18.
 
+use crate::protocol::encode;
 use crate::protocol::{
-    ExplorationRequest, Flags, WireDecode, WireEncode, WireReader, WireWriter,
+    ExplorationRequest, Flags,
     identity::{CameraCommand, Command, Endpoint},
 };
 use crate::{Error, Result};
-use num_enum::{FromPrimitive, IntoPrimitive};
+use binrw::{BinRead, BinWrite};
 use std::time::Duration;
 
 const SPEED_RATIO_MASK: u16 = 0x003f;
 
 /// Lossless wire resolution identifier.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, BinRead, BinWrite)]
 #[repr(transparent)]
 pub struct VideoResolutionCode(pub u8);
 
@@ -102,16 +103,20 @@ pub static VIDEO_RESOLUTIONS: [VideoResolutionInfo; 35] = [
 ///
 /// Labels are model-specific external candidates; exact dimensions and
 /// device/mode support are not encoded here.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, IntoPrimitive)]
-#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
 pub enum NanoVideoResolutionCode {
-    Uhd4k16By9 = 0x10,
-    Qhd2700p16By9 = 0x2d,
-    FullHd1080p16By9 = 0x0a,
-    Uhd4k4By3 = 0x67,
-    Qhd2700p4By3 = 0x5f,
-    FullHd1080p4By3 = 0x0c,
-    #[num_enum(catch_all)]
+    #[brw(magic = 0x10u8)]
+    Uhd4k16By9,
+    #[brw(magic = 0x2du8)]
+    Qhd2700p16By9,
+    #[brw(magic = 0x0au8)]
+    FullHd1080p16By9,
+    #[brw(magic = 0x67u8)]
+    Uhd4k4By3,
+    #[brw(magic = 0x5fu8)]
+    Qhd2700p4By3,
+    #[brw(magic = 0x0cu8)]
+    FullHd1080p4By3,
     Unknown(u8),
 }
 
@@ -138,36 +143,55 @@ const fn build_resolution_lookup() -> [Option<&'static VideoResolutionInfo>; RES
 }
 
 /// Named frame-rate code values. The variants do not establish device support.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, FromPrimitive, IntoPrimitive)]
-#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
 pub enum VideoFrameRateCode {
-    Unspecified = 0,
-    Fps24000Over1001 = 1,
-    Fps25 = 2,
-    Fps30000Over1001 = 3,
-    Fps48000Over1001 = 4,
-    Fps50 = 5,
-    Fps60000Over1001 = 6,
-    Fps120000Over1001 = 7,
-    Fps240 = 8,
-    Fps100 = 10,
-    Fps96000Over1001 = 11,
-    Fps24 = 13,
-    Fps30 = 14,
-    Fps48 = 15,
-    Fps60 = 16,
-    Fps120 = 24,
-    Fps96 = 25,
-    Fps72Code26 = 26,
-    Fps72Code27 = 27,
-    Fps75 = 28,
-    Fps200 = 0x13,
-    #[num_enum(catch_all)]
+    #[brw(magic = 0u8)]
+    Unspecified,
+    #[brw(magic = 1u8)]
+    Fps24000Over1001,
+    #[brw(magic = 2u8)]
+    Fps25,
+    #[brw(magic = 3u8)]
+    Fps30000Over1001,
+    #[brw(magic = 4u8)]
+    Fps48000Over1001,
+    #[brw(magic = 5u8)]
+    Fps50,
+    #[brw(magic = 6u8)]
+    Fps60000Over1001,
+    #[brw(magic = 7u8)]
+    Fps120000Over1001,
+    #[brw(magic = 8u8)]
+    Fps240,
+    #[brw(magic = 10u8)]
+    Fps100,
+    #[brw(magic = 11u8)]
+    Fps96000Over1001,
+    #[brw(magic = 13u8)]
+    Fps24,
+    #[brw(magic = 14u8)]
+    Fps30,
+    #[brw(magic = 15u8)]
+    Fps48,
+    #[brw(magic = 16u8)]
+    Fps60,
+    #[brw(magic = 24u8)]
+    Fps120,
+    #[brw(magic = 25u8)]
+    Fps96,
+    #[brw(magic = 26u8)]
+    Fps72Code26,
+    #[brw(magic = 27u8)]
+    Fps72Code27,
+    #[brw(magic = 28u8)]
+    Fps75,
+    #[brw(magic = 0x13u8)]
+    Fps200,
     Unknown(u8),
 }
 
 /// Opaque one-byte field; its physical meanings and device support are unspecified.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
 #[repr(transparent)]
 pub struct VideoFovCode(pub u8);
 
@@ -177,21 +201,9 @@ impl From<u8> for VideoFovCode {
     }
 }
 
-impl WireEncode for VideoFovCode {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        writer.write_u8(self.0);
-        Ok(())
-    }
-}
-
-impl WireDecode for VideoFovCode {
-    fn read_from(reader: &mut WireReader<'_>, _context: &()) -> Result<Self> {
-        Ok(Self(reader.read_u8()?))
-    }
-}
-
 /// Preserved format options, with only the speed-ratio bit boundary identified.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
+#[brw(little)]
 pub struct VideoFormatOptions(pub u16);
 
 impl VideoFormatOptions {
@@ -211,49 +223,17 @@ impl VideoFormatOptions {
     }
 }
 
-impl WireEncode for VideoFormatOptions {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        writer.write_u16_le(self.0);
-        Ok(())
-    }
-}
-
-impl WireDecode for VideoFormatOptions {
-    fn read_from(reader: &mut WireReader<'_>, _context: &()) -> Result<Self> {
-        Ok(Self(reader.read_u16_le()?))
-    }
-}
-
 /// Five-byte recording-format value.
 ///
 /// This decodes exactly one format span, not a complete notification. Device
 /// support and accepted combinations are unspecified.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
+#[brw(little)]
 pub struct VideoFormat {
     pub resolution: VideoResolutionCode,
     pub frame_rate: VideoFrameRateCode,
     pub fov: VideoFovCode,
     pub options: VideoFormatOptions,
-}
-
-impl WireEncode for VideoFormat {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        self.resolution.write_to(writer)?;
-        self.frame_rate.write_to(writer)?;
-        self.fov.write_to(writer)?;
-        self.options.write_to(writer)
-    }
-}
-
-impl WireDecode for VideoFormat {
-    fn read_from(reader: &mut WireReader<'_>, _context: &()) -> Result<Self> {
-        Ok(Self {
-            resolution: VideoResolutionCode::read_from(reader, &())?,
-            frame_rate: VideoFrameRateCode::read_from(reader, &())?,
-            fov: VideoFovCode::read_from(reader, &())?,
-            options: VideoFormatOptions::read_from(reader, &())?,
-        })
-    }
 }
 
 impl VideoFormat {
@@ -282,7 +262,7 @@ impl VideoFormat {
 ///
 /// No default format or read request is supplied. This type only encodes the
 /// five-byte request body; command delivery is handled by the transport layer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinWrite)]
 pub struct VideoFormatSet {
     format: VideoFormat,
 }
@@ -328,59 +308,100 @@ impl VideoFormatSet {
             receiver: Endpoint::Camera,
             command: Command::Camera(CameraCommand::VideoFormatSet),
             flags,
-            payload: self.encode()?,
+            payload: encode(&self)?,
             timeout,
         })
-    }
-}
-
-impl WireEncode for VideoFormatSet {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        self.format.write_to(writer)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::{decode, encode};
 
     const CURRENT: [u8; 5] = [0x16, 0x03, 0xa5, 0xff, 0x93];
     const TARGET: VideoResolutionCode = VideoResolutionCode(0x65);
 
     fn current() -> VideoFormat {
-        VideoFormat::decode(&CURRENT, &()).unwrap()
+        decode::<VideoFormat>(&CURRENT, ()).unwrap()
     }
 
     #[test]
     fn format_round_trips_unknown_fields_and_requires_exact_length() {
-        assert_eq!(current().encode().unwrap(), CURRENT);
+        assert_eq!(encode(&current()).unwrap(), CURRENT);
         for length in 0..CURRENT.len() {
-            assert!(VideoFormat::decode(&CURRENT[..length], &()).is_err());
+            assert!(decode::<VideoFormat>(&CURRENT[..length], ()).is_err());
         }
         let mut extra = CURRENT.to_vec();
         extra.push(0);
-        assert!(VideoFormat::decode(&extra, &()).is_err());
+        assert!(decode::<VideoFormat>(&extra, ()).is_err());
+    }
+
+    #[test]
+    fn format_preserves_every_resolution_and_frame_rate_code() {
+        for code in u8::MIN..=u8::MAX {
+            let bytes = [code, code, code, 0x34, 0x12];
+            let format = decode::<VideoFormat>(&bytes, ()).unwrap();
+            assert_eq!(format.resolution.0, code);
+            assert_eq!(encode(&format.frame_rate).unwrap(), [code]);
+            assert_eq!(format.fov.0, code);
+            assert_eq!(format.options.0, 0x1234);
+            assert_eq!(encode(&format).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn source_byte_types_round_trip_all_codes_independently() {
+        fn assert_byte_round_trip<T>(value: T, byte: u8)
+        where
+            T: std::fmt::Debug + PartialEq,
+            for<'a> T: BinRead<Args<'a> = ()> + BinWrite<Args<'a> = ()>,
+        {
+            assert_eq!(decode::<T>(&[byte], ()).unwrap(), value);
+            assert_eq!(encode(&value).unwrap(), [byte]);
+            assert!(decode::<T>(&[], ()).is_err());
+            assert!(decode::<T>(&[byte, 0], ()).is_err());
+        }
+
+        for code in u8::MIN..=u8::MAX {
+            assert_byte_round_trip(VideoResolutionCode(code), code);
+            assert_byte_round_trip(decode::<VideoFrameRateCode>(&[code], ()).unwrap(), code);
+            assert_byte_round_trip(VideoFovCode(code), code);
+        }
+    }
+
+    #[test]
+    fn source_options_round_trip_all_bits_as_little_endian() {
+        for word in u16::MIN..=u16::MAX {
+            let bytes = word.to_le_bytes();
+            let value = decode::<VideoFormatOptions>(&bytes, ()).unwrap();
+            assert_eq!(value.0, word);
+            assert_eq!(encode(&value).unwrap(), bytes);
+        }
+        assert!(decode::<VideoFormatOptions>(&[], ()).is_err());
+        assert!(decode::<VideoFormatOptions>(&[0x34], ()).is_err());
+        assert!(decode::<VideoFormatOptions>(&[0x34, 0x12, 0], ()).is_err());
     }
 
     #[test]
     fn nano_resolution_labels_and_slow_motion_factor_remain_model_qualified() {
-        let nano_format = VideoFormat::decode(&[0x10, 0x08, 0, 0, 4], &()).unwrap();
+        let nano_format = decode::<VideoFormat>(&[0x10, 0x08, 0, 0, 4], ()).unwrap();
         assert_eq!(nano_format.nano_slow_motion_factor(), 4);
-        assert_eq!(nano_format.encode().unwrap(), [0x10, 0x08, 0, 0, 4]);
+        assert_eq!(encode(&nano_format).unwrap(), [0x10, 0x08, 0, 0, 4]);
 
-        let other_layout = VideoFormat::decode(&[0x10, 0x08, 0, 8, 0], &()).unwrap();
+        let other_layout = decode::<VideoFormat>(&[0x10, 0x08, 0, 8, 0], ()).unwrap();
         assert_eq!(other_layout.nano_slow_motion_factor(), 0);
-        assert_eq!(other_layout.encode().unwrap(), [0x10, 0x08, 0, 8, 0]);
+        assert_eq!(encode(&other_layout).unwrap(), [0x10, 0x08, 0, 8, 0]);
     }
 
     #[test]
     fn set_preserves_current_fields_and_encodes_wire_codes() {
         let set = VideoFormatSet::from_current(current(), TARGET, VideoFrameRateCode::Fps30);
-        assert_eq!(set.encode().unwrap(), [0x65, 0x0e, 0xa5, 0xff, 0x93]);
+        assert_eq!(encode(&set).unwrap(), [0x65, 0x0e, 0xa5, 0xff, 0x93]);
         assert_eq!(set.format().fov, current().fov);
         assert_eq!(set.format().options, current().options);
         assert_eq!(
-            set.with_fov(VideoFovCode(4)).encode().unwrap(),
+            encode(&set.with_fov(VideoFovCode(4))).unwrap(),
             [0x65, 0x0e, 0x04, 0xff, 0x93]
         );
     }
@@ -403,7 +424,7 @@ mod tests {
             }
         }
         assert_eq!(
-            set.with_speed_ratio_code(0x02).unwrap().encode().unwrap(),
+            encode(&set.with_speed_ratio_code(0x02).unwrap()).unwrap(),
             [0x65, 0x0e, 0xa5, 0xc2, 0x93]
         );
     }
@@ -420,7 +441,7 @@ mod tests {
             Command::Camera(CameraCommand::VideoFormatSet)
         );
         assert_eq!(request.command.wire(), (0x02, 0x18));
-        assert_eq!(request.payload, set.encode().unwrap());
+        assert_eq!(request.payload, encode(&set).unwrap());
         assert!(!request.is_known_read());
         assert!(request.validate(false, false).is_err());
         assert!(request.validate(true, false).is_err());

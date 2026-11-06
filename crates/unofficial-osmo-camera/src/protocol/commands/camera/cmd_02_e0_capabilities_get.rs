@@ -1,19 +1,19 @@
 //! Targeted camera capability GET payloads and responses.
+use crate::protocol::binrw_error;
+use crate::protocol::decode;
+use binrw::{BinRead, BinResult, BinWrite, Endian};
+use std::io::{Read, Seek, Write};
 
 use crate::{
     Error, Result,
     protocol::{
-        Query, ResponseStatus, WireDecode, WireEncode, WireReader, WireWriter,
+        Query, ResponseStatus,
         commands::reply::CameraRawData,
         identity::{CameraCommand, Command, Endpoint},
     },
 };
 
 const CAPABILITY_OPERATION: u8 = 2;
-const CAPABILITY_COUNT: u8 = 1;
-const EI_RANGE_SELECTOR: u8 = 1;
-const RECOMMENDED_EI_SELECTOR: u8 = 2;
-const LENS_SELECTOR: u8 = 3;
 const ACCESSORY_SELECTOR: u8 = 4;
 const STATUS_LENGTH: usize = 1;
 const ACCESSORY_HEADER_LENGTH: usize = 4;
@@ -52,33 +52,28 @@ const ACCESSORY_WIFI_SHARE_MASK: u8 = 0x04;
 ///
 /// This is the library's compatibility codec, not a confirmed device support
 /// list. The selector names and accessory flag meanings remain unconfirmed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinWrite)]
 pub enum CapabilityQuery {
     /// Read exposure-index range data.
+    #[bw(magic = b"\x02\x01\x01")]
     EiRange,
     /// Read recommended exposure-index data.
+    #[bw(magic = b"\x02\x01\x02")]
     RecommendedEi,
     /// Read lens-information data.
+    #[bw(magic = b"\x02\x01\x03")]
     LensInformation,
     /// Read accessory capability flags.
+    #[bw(magic = b"\x02\x01\x04")]
     Accessories,
-}
-
-impl WireEncode for CapabilityQuery {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        let selector = match self {
-            Self::EiRange => EI_RANGE_SELECTOR,
-            Self::RecommendedEi => RECOMMENDED_EI_SELECTOR,
-            Self::LensInformation => LENS_SELECTOR,
-            Self::Accessories => ACCESSORY_SELECTOR,
-        };
-        writer.write_bytes(&[CAPABILITY_OPERATION, CAPABILITY_COUNT, selector]);
-        Ok(())
-    }
 }
 
 impl Query for CapabilityQuery {
     type Response = CapabilityReply;
+
+    fn response_args(&self) -> (&Self,) {
+        (self,)
+    }
 
     fn receiver(&self) -> Endpoint {
         Endpoint::Camera
@@ -89,10 +84,22 @@ impl Query for CapabilityQuery {
     }
 }
 
-impl WireDecode<CapabilityQuery> for CapabilityReply {
-    fn read_from(reader: &mut WireReader<'_>, query: &CapabilityQuery) -> Result<Self> {
-        let length = reader.remaining().len();
-        let payload = reader.read_bytes(length)?;
+impl BinRead for CapabilityReply {
+    type Args<'a> = (&'a CapabilityQuery,);
+
+    fn read_options<R: Read + Seek>(
+        reader: &mut R,
+        endian: Endian,
+        (query,): Self::Args<'_>,
+    ) -> BinResult<Self> {
+        let pos = reader.stream_position()?;
+        let raw = CameraRawData::read_options(reader, endian, ())?;
+        Self::from_payload(&raw.0, query).map_err(|error| binrw_error(pos, error))
+    }
+}
+
+impl CapabilityReply {
+    fn from_payload(payload: &[u8], query: &CapabilityQuery) -> Result<Self> {
         let invalid = |reason| Error::InvalidReply {
             command: query.command(),
             reason,
@@ -100,7 +107,8 @@ impl WireDecode<CapabilityQuery> for CapabilityReply {
         let status = payload
             .first()
             .copied()
-            .map(ResponseStatus::from)
+            .map(|value| decode::<ResponseStatus>(&[value], ()))
+            .transpose()?
             .ok_or_else(|| invalid("missing capability status byte"))?;
         if status != ResponseStatus::Success {
             return Ok(Self::Rejected {
@@ -118,7 +126,7 @@ impl WireDecode<CapabilityQuery> for CapabilityReply {
                     "accessory reply operation or selector does not match",
                 ));
             }
-            let status = ResponseStatus::from(payload[ACCESSORY_STATUS_OFFSET]);
+            let status = decode::<ResponseStatus>(&[payload[ACCESSORY_STATUS_OFFSET]], ())?;
             if status != ResponseStatus::Success {
                 return Ok(Self::Rejected {
                     status,
@@ -127,7 +135,7 @@ impl WireDecode<CapabilityQuery> for CapabilityReply {
                 });
             }
             return Ok(Self::Accepted(CapabilityValue::Accessories(
-                AccessoryCapabilityResponse::decode(&payload[ACCESSORY_HEADER_LENGTH..], &())
+                decode::<AccessoryCapabilityResponse>(&payload[ACCESSORY_HEADER_LENGTH..], ())
                     .map_err(|_| invalid("truncated accessory flags"))?,
             )));
         }
@@ -193,10 +201,10 @@ pub enum CapabilityValue {
 /// `CapabilityReply` validates the header. The legacy `supports_*` helpers test
 /// bits 0/1/2 only; their labels are not confirmed availability, enabled state,
 /// readiness or authorization. The unknown byte and other bits are retained.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, BinRead, BinWrite)]
 pub struct AccessoryCapabilityResponse {
-    pub raw_flags: u8,
     pub unmapped_byte: u8,
+    pub raw_flags: u8,
     pub extension: CameraRawData,
 }
 
@@ -217,40 +225,34 @@ impl AccessoryCapabilityResponse {
     }
 }
 
-impl WireDecode for AccessoryCapabilityResponse {
-    fn read_from(reader: &mut WireReader<'_>, context: &()) -> Result<Self> {
-        Ok(Self {
-            unmapped_byte: reader.read_u8()?,
-            raw_flags: reader.read_u8()?,
-            extension: CameraRawData::read_from(reader, context)?,
-        })
-    }
-}
+impl BinWrite for CapabilityReply {
+    type Args<'a> = ();
 
-impl WireEncode for AccessoryCapabilityResponse {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        writer.write_u8(self.unmapped_byte);
-        writer.write_u8(self.raw_flags);
-        self.extension.write_to(writer)
-    }
-}
-
-impl WireEncode for CapabilityReply {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
+    fn write_options<W: Write + Seek>(
+        &self,
+        writer: &mut W,
+        endian: Endian,
+        (): (),
+    ) -> BinResult<()> {
+        let pos = writer.stream_position()?;
         match self {
-            Self::Accepted(CapabilityValue::Accessories(value)) => {
-                ResponseStatus::Success.write_to(writer)?;
-                writer.write_u8(CAPABILITY_OPERATION);
-                ResponseStatus::Success.write_to(writer)?;
-                writer.write_u8(ACCESSORY_SELECTOR);
-                value.write_to(writer)
-            }
+            Self::Accepted(CapabilityValue::Accessories(value)) => (
+                ResponseStatus::Success,
+                CAPABILITY_OPERATION,
+                ResponseStatus::Success,
+                ACCESSORY_SELECTOR,
+                value,
+            )
+                .write_options(writer, endian, ()),
             Self::Accepted(CapabilityValue::Unmapped { data }) => {
                 if data.is_empty() {
-                    return Err(Error::Protocol("accepted capability reply has no data"));
+                    return Err(binrw_error(
+                        pos,
+                        Error::Protocol("accepted capability reply has no data"),
+                    ));
                 }
-                ResponseStatus::Success.write_to(writer)?;
-                writer.write_bytes(data);
+                ResponseStatus::Success.write_options(writer, endian, ())?;
+                writer.write_all(data)?;
                 Ok(())
             }
             Self::Rejected {
@@ -259,19 +261,23 @@ impl WireEncode for CapabilityReply {
                 extension,
             } => {
                 if *status == ResponseStatus::Success {
-                    return Err(Error::Protocol(
-                        "rejected capability cannot have success status",
+                    return Err(binrw_error(
+                        pos,
+                        Error::Protocol("rejected capability cannot have success status"),
                     ));
                 }
                 if *layer == CapabilityStatusLayer::Accessory {
-                    ResponseStatus::Success.write_to(writer)?;
-                    writer.write_u8(CAPABILITY_OPERATION);
+                    (ResponseStatus::Success, CAPABILITY_OPERATION).write_options(
+                        writer,
+                        endian,
+                        (),
+                    )?;
                 }
-                status.write_to(writer)?;
+                status.write_options(writer, endian, ())?;
                 if *layer == CapabilityStatusLayer::Accessory {
-                    writer.write_u8(ACCESSORY_SELECTOR);
+                    ACCESSORY_SELECTOR.write_options(writer, endian, ())?;
                 }
-                extension.write_to(writer)
+                extension.write_options(writer, endian, ())
             }
         }
     }
@@ -280,13 +286,13 @@ impl WireEncode for CapabilityReply {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{WireDecode, WireU8};
+    use crate::protocol::{decode, encode};
 
     #[test]
     fn accessory_status_and_unknown_fields_are_preserved() {
         let query = CapabilityQuery::Accessories;
         let payload = [0, 2, 0, 4, 0xa5, 0x87, 0x99];
-        let reply = CapabilityReply::decode(&payload, &query).unwrap();
+        let reply = decode::<CapabilityReply>(&payload, (&query,)).unwrap();
         assert_eq!(
             reply,
             CapabilityReply::Accepted(CapabilityValue::Accessories(AccessoryCapabilityResponse {
@@ -296,7 +302,7 @@ mod tests {
             }))
         );
         assert!(matches!(
-            CapabilityReply::decode(&[0, 2, 0xe0, 4, 0, 0], &query).unwrap(),
+            decode::<CapabilityReply>(&[0, 2, 0xe0, 4, 0, 0], (&query,)).unwrap(),
             CapabilityReply::Rejected {
                 status: ResponseStatus::Unknown(0xe0),
                 layer: CapabilityStatusLayer::Accessory,
@@ -304,7 +310,7 @@ mod tests {
             }
         ));
         assert_eq!(
-            CapabilityReply::decode(&[0xe0, 2, 0], &query).unwrap(),
+            decode::<CapabilityReply>(&[0xe0, 2, 0], (&query,)).unwrap(),
             CapabilityReply::Rejected {
                 status: ResponseStatus::Unknown(0xe0),
                 layer: CapabilityStatusLayer::Outer,
@@ -318,7 +324,8 @@ mod tests {
         let mut bytes = [0, 2, 0, 4, 0xa5, 0, 0x5a];
         for flags in [0, 1, 2, 4, 0x80, 0xff] {
             bytes[5] = flags;
-            let reply = CapabilityReply::decode(&bytes, &CapabilityQuery::Accessories).unwrap();
+            let reply =
+                decode::<CapabilityReply>(&bytes, (&CapabilityQuery::Accessories,)).unwrap();
             let CapabilityReply::Accepted(CapabilityValue::Accessories(value)) = &reply else {
                 panic!("expected accepted accessories");
             };
@@ -328,7 +335,7 @@ mod tests {
             assert_eq!(value.raw_flags, flags);
             assert_eq!(value.unmapped_byte, 0xa5);
             assert_eq!(value.extension.0, [0x5a]);
-            assert_eq!(reply.encode().unwrap(), bytes);
+            assert_eq!(encode(&reply).unwrap(), bytes);
         }
     }
 
@@ -336,14 +343,17 @@ mod tests {
     fn unmapped_data_is_retained_and_incomplete_success_is_invalid() {
         let query = CapabilityQuery::EiRange;
         assert_eq!(
-            CapabilityReply::decode(b"\x00\xde\xad", &query).unwrap(),
+            decode::<CapabilityReply>(b"\x00\xde\xad", (&query,)).unwrap(),
             CapabilityReply::Accepted(CapabilityValue::Unmapped {
                 data: vec![0xde, 0xad]
             })
         );
-        assert!(CapabilityReply::decode(&[0], &query).is_err());
-        let status = ResponseStatus::from_wire_u8(0xe0).unwrap();
-        assert_eq!(status.to_wire_u8(), 0xe0);
+        assert!(decode::<CapabilityReply>(&[0], (&query,)).is_err());
+        let status = decode::<ResponseStatus>(&[0xe0], ()).unwrap();
+        assert_eq!(
+            encode(&status).expect("one-byte enum encodes into memory")[0],
+            0xe0
+        );
     }
 
     #[test]
@@ -354,8 +364,8 @@ mod tests {
             &[0, 2, 0xe0, 4, 0xab][..],
             &[0xe0, 0xab][..],
         ] {
-            let reply = CapabilityReply::decode(bytes, &query).unwrap();
-            assert_eq!(reply.encode().unwrap(), bytes);
+            let reply = decode::<CapabilityReply>(bytes, (&query,)).unwrap();
+            assert_eq!(encode(&reply).unwrap(), bytes);
         }
         for bytes in [
             &[][..],
@@ -367,18 +377,17 @@ mod tests {
             &[0, 1, 0, 4, 0, 0][..],
             &[0, 2, 0, 3, 0, 0][..],
         ] {
-            assert!(CapabilityReply::decode(bytes, &query).is_err());
+            assert!(decode::<CapabilityReply>(bytes, (&query,)).is_err());
         }
         let bytes = [0, 0xab, 0xcd];
-        let reply = CapabilityReply::decode(&bytes, &CapabilityQuery::EiRange).unwrap();
-        assert_eq!(reply.encode().unwrap(), bytes);
+        let reply = decode::<CapabilityReply>(&bytes, (&CapabilityQuery::EiRange,)).unwrap();
+        assert_eq!(encode(&reply).unwrap(), bytes);
         assert!(
-            CapabilityReply::Rejected {
+            encode(&CapabilityReply::Rejected {
                 status: ResponseStatus::Success,
                 layer: CapabilityStatusLayer::Outer,
                 extension: CameraRawData(vec![]),
-            }
-            .encode()
+            })
             .is_err()
         );
     }

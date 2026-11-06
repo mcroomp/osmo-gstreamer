@@ -1,9 +1,10 @@
 //! Wi-Fi country-data GET.
+use binrw::{BinRead, BinWrite};
 
 use crate::{
     Error, Result,
     protocol::{
-        Query, WireDecode, WireEncode, WireReader, WireWriter,
+        Query,
         commands::reply::{CameraRawData, CameraReadReply},
         identity::{Command, Endpoint, WifiCommand},
     },
@@ -15,7 +16,8 @@ use crate::{
 /// Prefixed data is `FF, country[2], 00`, followed by any opaque extension.
 /// Country bytes are not required to be alphabetic or UTF-8. A status-only
 /// health acknowledgment is not a typed country reply.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, BinRead, BinWrite)]
+#[br(try_map = Self::from_raw)]
 pub struct WifiCountryData {
     raw: CameraRawData,
 }
@@ -42,19 +44,12 @@ impl WifiCountryData {
     }
 }
 
-impl<Q> WireDecode<Q> for WifiCountryData {
-    fn read_from(reader: &mut WireReader<'_>, query: &Q) -> Result<Self> {
-        let raw = CameraRawData::read_from(reader, query)?;
+impl WifiCountryData {
+    fn from_raw(raw: CameraRawData) -> Result<Self> {
         match raw.0.as_slice() {
             [_, _, 0] | [0xff, _, _, 0, ..] => Ok(Self { raw }),
             _ => Err(Error::Protocol("invalid Wi-Fi country reply layout")),
         }
-    }
-}
-
-impl WireEncode for WifiCountryData {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        self.raw.write_to(writer)
     }
 }
 
@@ -71,17 +66,15 @@ impl WireEncode for WifiCountryData {
 ///
 /// A successful health check only checks status; it does not determine the
 /// country format, regulatory state, network association or media readiness.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, BinWrite)]
+#[bw(map = |_: &Self| ())]
 pub struct WifiCountryGet;
-
-impl WireEncode for WifiCountryGet {
-    fn write_to(&self, _writer: &mut WireWriter) -> Result<()> {
-        Ok(())
-    }
-}
 
 impl Query for WifiCountryGet {
     type Response = CameraReadReply<WifiCountryData>;
+
+    fn response_args(&self) {}
+
     fn receiver(&self) -> Endpoint {
         Endpoint::Wifi
     }
@@ -94,11 +87,11 @@ impl Query for WifiCountryGet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::WireDecode;
+    use crate::protocol::{decode, encode};
 
     #[test]
     fn synthetic_country_formats_preserve_codes_terminators_and_extensions() {
-        let query = WifiCountryGet;
+        let _query = WifiCountryGet;
         for code in [*b"XX", [0xff, 0xfe], [0, 0]] {
             for prefix in [false, true] {
                 let mut bytes = vec![0];
@@ -106,23 +99,23 @@ mod tests {
                     bytes.push(0xff);
                 }
                 bytes.extend_from_slice(&[code[0], code[1], 0]);
-                let reply = CameraReadReply::<WifiCountryData>::decode(&bytes, &query).unwrap();
+                let reply = decode::<CameraReadReply<WifiCountryData>>(&bytes, ()).unwrap();
                 let CameraReadReply::Accepted(value) = &reply else {
                     panic!("expected accepted country");
                 };
                 assert_eq!(value.format_prefix(), prefix.then_some(0xff));
                 assert_eq!(value.country_code_raw(), code);
                 assert!(value.extension().is_empty());
-                assert_eq!(reply.encode().unwrap(), bytes);
+                assert_eq!(encode(&reply).unwrap(), bytes);
                 if prefix {
                     bytes.extend_from_slice(&[0xa5, 0x5a]);
-                    let reply = CameraReadReply::<WifiCountryData>::decode(&bytes, &query).unwrap();
+                    let reply = decode::<CameraReadReply<WifiCountryData>>(&bytes, ()).unwrap();
                     let CameraReadReply::Accepted(value) = &reply else {
                         panic!("expected accepted country");
                     };
                     assert_eq!(value.country_code_raw(), code);
                     assert_eq!(value.extension(), [0xa5, 0x5a]);
-                    assert_eq!(reply.encode().unwrap(), bytes);
+                    assert_eq!(encode(&reply).unwrap(), bytes);
                 }
             }
         }
@@ -135,14 +128,11 @@ mod tests {
             &[0, 0xff, b'X', b'X', 1][..],
             &[0, 0xa5, b'X', b'X', 0][..],
         ] {
-            assert!(CameraReadReply::<WifiCountryData>::decode(bytes, &query).is_err());
+            assert!(decode::<CameraReadReply::<WifiCountryData>>(bytes, ()).is_err());
         }
         for bytes in [&[0xe0][..], &[0xe0, 0xa5, 0x5a][..]] {
             assert_eq!(
-                CameraReadReply::<WifiCountryData>::decode(bytes, &query)
-                    .unwrap()
-                    .encode()
-                    .unwrap(),
+                encode(&decode::<CameraReadReply::<WifiCountryData>>(bytes, ()).unwrap()).unwrap(),
                 bytes
             );
         }

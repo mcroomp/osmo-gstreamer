@@ -1,16 +1,11 @@
 //! Wi-Fi role query and SET role values.
 
-use crate::{
-    Error, Result,
-    protocol::{
-        Query, WireEncode, WireWriter,
-        commands::reply::{CameraRawData, CameraReadReply},
-        identity::{Command, Endpoint, WifiCommand},
-    },
+use crate::protocol::{
+    Query,
+    commands::reply::{CameraRawData, CameraReadReply},
+    identity::{Command, Endpoint, WifiCommand},
 };
-use num_enum::{IntoPrimitive, TryFromPrimitive};
-
-const ROLE_GET_OPERATION: u8 = 0;
+use binrw::{BinRead, BinWrite};
 
 /// Request the Wi-Fi role; the accepted response layout is unspecified.
 ///
@@ -24,18 +19,15 @@ const ROLE_GET_OPERATION: u8 = 0;
 ///
 /// The accepted-body layout and model support remain unspecified. In
 /// particular, do not interpret an arbitrary returned byte as `WifiRole`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, BinWrite)]
+#[bw(magic = 0u8)]
 pub struct WifiRoleGet;
-
-impl WireEncode for WifiRoleGet {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        writer.write_u8(ROLE_GET_OPERATION);
-        Ok(())
-    }
-}
 
 impl Query for WifiRoleGet {
     type Response = CameraReadReply<CameraRawData>;
+
+    fn response_args(&self) {}
+
     fn receiver(&self) -> Endpoint {
         Endpoint::Wifi
     }
@@ -44,19 +36,10 @@ impl Query for WifiRoleGet {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
-#[num_enum(error_type(name = Error, constructor = WifiRole::invalid_wire))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinWrite, BinRead)]
+#[brw(repr = u8)]
 #[repr(u8)]
 pub enum WifiRole {
     Hotspot = 0,
     Station = 1,
-}
-
-impl WifiRole {
-    fn invalid_wire(value: u8) -> Error {
-        Error::UnsupportedValue {
-            field: "Wi-Fi role",
-            value,
-        }
-    }
 }

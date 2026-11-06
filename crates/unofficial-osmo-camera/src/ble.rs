@@ -273,28 +273,28 @@ impl BleQuery {
                     query.receiver(),
                     id,
                     query.command(),
-                    &query.encode()?,
+                    &encode(&query)?,
                 ));
             }
             Self::WifiSsid => (
                 WifiSsidGet.receiver(),
                 WifiSsidGet.command(),
-                WifiSsidGet.encode()?,
+                encode(&WifiSsidGet)?,
             ),
             Self::WifiMac => (
                 WifiMacGet.receiver(),
                 WifiMacGet.command(),
-                WifiMacGet.encode()?,
+                encode(&WifiMacGet)?,
             ),
             Self::WifiCountry => (
                 WifiCountryGet.receiver(),
                 WifiCountryGet.command(),
-                WifiCountryGet.encode()?,
+                encode(&WifiCountryGet)?,
             ),
             Self::WifiRole => (
                 Endpoint::Wifi,
                 Command::Wifi(WifiCommand::GetRole),
-                WifiRoleGet.encode()?,
+                encode(&WifiRoleGet)?,
             ),
             Self::CameraFov | Self::CameraIsoLimit | Self::CameraParameter0014 => {
                 let parameter = match self {
@@ -306,7 +306,7 @@ impl BleQuery {
                     Endpoint::Camera,
                     id,
                     Command::Camera(CameraCommand::Parameters),
-                    &CameraParametersGet::single(parameter)?.encode()?,
+                    &encode(&CameraParametersGet::single(parameter)?)?,
                 ));
             }
         };
@@ -440,11 +440,11 @@ impl BleSession {
             receiver: query.receiver(),
             command: query.command(),
             flags: Flags::REQUEST,
-            payload: query.encode()?,
+            payload: encode(&query)?,
             timeout: query.timeout(),
         };
         let reply = self.request_raw(request, false, false)?;
-        <Q::Response as WireDecode<Q>>::decode(&reply.payload, &query)
+        decode::<Q::Response>(&reply.payload, query.response_args())
     }
     /// Exact numeric exploration requests still use this owner's pacing,
     /// keepalives and correlation; rejection status is returned unchanged.
@@ -854,12 +854,13 @@ impl FrameBuffer {
         self.0.extend_from_slice(bytes);
         let mut messages = Vec::new();
         while self.0.len() > DUML_CRC8 {
-            let header = u16_at(&self.0, DUML_LENGTH);
+            let prefix = decode::<DumlPrefix>(&self.0[..DUML_CRC8 + 1], ())?;
+            let header = prefix.length;
             let length = usize::from(header & DUML_LENGTH_MASK);
-            if self.0[0] != DUML_SYNC
+            if prefix.sync != DUML_SYNC
                 || header & !DUML_LENGTH_MASK != DUML_VERSION
                 || length < DUML_MIN
-                || crc8(&self.0[..DUML_CRC8]) != self.0[DUML_CRC8]
+                || crc8(&self.0[..DUML_CRC8]) != prefix.checksum
             {
                 return Err(Error::Protocol("invalid BLE DUML header"));
             }
@@ -943,25 +944,21 @@ impl<I: BleIo> Worker<I> {
             self.io.write(arm, bytes),
         )
         .await?;
+        log::trace!("BLE send packet: arm={arm} length={}", bytes.len());
         self.next_write = Instant::now() + WRITE_PACING;
         Ok(())
     }
     async fn send(&mut self, message: &Message) -> Result<()> {
-        let (set, command) = message.command.wire();
-        log::debug!(
-            "BLE request id={:04X} receiver={:02X} set={set:02X} command={command:02X} flags={:02X}",
-            message.id,
-            message.receiver.to_wire_u8(),
-            message.flags.0
-        );
-        self.write(false, &message.encode()?).await
+        self.write(false, &encode(&message)?).await?;
+        log::debug!("BLE send message: {}", message.diagnostic_metadata());
+        Ok(())
     }
     async fn keepalive(&mut self) -> Result<()> {
         self.next_keepalive = Instant::now() + KEEPALIVE_INTERVAL;
         let message = self.request(
             Endpoint::Session,
             Command::Common(CommonCommand::SessionKeepalive),
-            &SessionKeepaliveRequest.encode()?,
+            &encode(&SessionKeepaliveRequest)?,
         );
         self.send(&message).await
     }
@@ -979,9 +976,9 @@ impl<I: BleIo> Worker<I> {
             if let Some(message) = self.pending.pop_front() {
                 if message.receiver == Endpoint::App && message.flags == Flags::REQUEST {
                     let payload = if message.command == Command::Common(CommonCommand::DeviceInfo) {
-                        AppDeviceInfoResponse.encode()?
+                        encode(&AppDeviceInfoResponse)?
                     } else if message.command == Command::Wifi(WifiCommand::PairApproval) {
-                        ResponseStatus::Success.encode()?
+                        encode(&ResponseStatus::Success)?
                     } else {
                         message.payload.clone()
                     };
@@ -996,7 +993,7 @@ impl<I: BleIo> Worker<I> {
                 }
                 if message.command == Command::Common(CommonCommand::ActivationStatus)
                     && let Ok(notification) =
-                        ActivationStatusNotification::decode(&message.payload, &())
+                        decode::<ActivationStatusNotification>(&message.payload, ())
                 {
                     self.inactive = matches!(
                         notification.state,
@@ -1013,7 +1010,13 @@ impl<I: BleIo> Worker<I> {
                 _ = self.cancellation.cancelled() => return Err(Error::Cancelled),
                 _ = sleep_until(until.min(self.next_keepalive)) => {},
                 bytes = self.io.next() => {
-                    self.pending.extend(self.frames.feed(&bytes?)?);
+                    let bytes = bytes?;
+                    log::trace!("BLE receive packet: length={}", bytes.len());
+                    let messages = self.frames.feed(&bytes)?;
+                    for message in &messages {
+                        log::debug!("BLE receive message: {}", message.diagnostic_metadata());
+                    }
+                    self.pending.extend(messages);
                     if self.pending.len() > MAX_PENDING_FRAMES {
                         return Err(Error::LimitExceeded("BLE pending frame overflow"));
                     }
@@ -1030,12 +1033,7 @@ impl<I: BleIo> Worker<I> {
         let until = Instant::now() + duration;
         while let Some(message) = self.message(until).await? {
             if message.is_reply_to(request) {
-                let (set, command) = message.command.wire();
-                log::debug!(
-                    "BLE reply id={:04X} set={set:02X} command={command:02X} status={:?}",
-                    message.id,
-                    message.payload.first()
-                );
+                log::debug!("BLE matched reply: {}", message.diagnostic_metadata());
                 return Ok(message);
             }
         }
@@ -1055,15 +1053,15 @@ impl<I: BleIo> Worker<I> {
     }
     async fn pair(&mut self, identity: &str) -> Result<()> {
         log::info!("Arming Nano pairing and waking BLE session");
-        self.write(true, &BlePairingArmRequest.encode()?).await?;
+        self.write(true, &encode(&BlePairingArmRequest)?).await?;
         let open = self.request(
             Endpoint::Session,
             Command::Common(CommonCommand::SessionKeepalive),
-            &SessionKeepaliveOpenRequest.encode()?,
+            &encode(&SessionKeepaliveOpenRequest)?,
         );
         self.send(&open).await?;
         self.pause(PAIR_SETTLE).await?;
-        let payload = PairingRequest { identity }.encode()?;
+        let payload = encode(&PairingRequest { identity })?;
         let first = self.request(Endpoint::Wifi, Command::Wifi(WifiCommand::Pair), &payload);
         self.send(&first).await?;
         let mut requests = vec![first];
@@ -1097,7 +1095,7 @@ impl<I: BleIo> Worker<I> {
         let wake = self.request(
             Endpoint::CameraWake,
             Command::CameraWake(CameraWakeCommand::Wake),
-            &BleWakeRequest.encode()?,
+            &encode(&BleWakeRequest)?,
         );
         self.send(&wake).await?;
         self.pause(WAKE_SETTLE).await?;
@@ -1112,14 +1110,14 @@ impl<I: BleIo> Worker<I> {
                 let request = self.request(
                     Endpoint::Wifi,
                     Command::Wifi(WifiCommand::Ssid),
-                    &WifiSsidGet.encode()?,
+                    &encode(&WifiSsidGet)?,
                 );
                 self.send(&request).await?;
                 match self.response(&request, IO_TIMEOUT).await {
                     Ok(message) => {
                         message.require_success()?;
                         if let CameraReadReply::Accepted(value) =
-                            CameraReadReply::<WifiSsidResponse>::decode(&message.payload, &())?
+                            decode::<CameraReadReply<WifiSsidResponse>>(&message.payload, ())?
                         {
                             ssid = Some(value.ssid);
                         }
@@ -1133,14 +1131,14 @@ impl<I: BleIo> Worker<I> {
                 let request = self.request(
                     Endpoint::Wifi,
                     Command::Wifi(WifiCommand::Password),
-                    &WifiPasswordRequest.encode()?,
+                    &encode(&WifiPasswordRequest)?,
                 );
                 self.send(&request).await?;
                 match self.response(&request, IO_TIMEOUT).await {
                     Ok(message) => {
                         message.require_success()?;
                         if let CameraReadReply::Accepted(value) =
-                            CameraReadReply::<WifiPasswordResponse>::decode(&message.payload, &())?
+                            decode::<CameraReadReply<WifiPasswordResponse>>(&message.payload, ())?
                         {
                             password = Some(value.password);
                         }
@@ -1164,7 +1162,7 @@ impl<I: BleIo> Worker<I> {
                 let wake = self.request(
                     Endpoint::CameraWake,
                     Command::CameraWake(CameraWakeCommand::Wake),
-                    &BleWakeRequest.encode()?,
+                    &encode(&BleWakeRequest)?,
                 );
                 self.send(&wake).await?;
                 self.pause(WAKE_SETTLE).await?;
@@ -1185,7 +1183,7 @@ impl<I: BleIo> Worker<I> {
         let request = self.request(
             Endpoint::Wifi,
             Command::Wifi(WifiCommand::SetRole),
-            &WifiRoleSetRequest { role }.encode()?,
+            &encode(&WifiRoleSetRequest { role })?,
         );
         self.send(&request).await?;
         self.response(&request, ROLE_TIMEOUT)
@@ -1197,11 +1195,10 @@ impl<I: BleIo> Worker<I> {
         log::info!("Selecting camera station mode; computer Wi-Fi is unchanged");
         self.set_role(WifiRole::Station).await?;
         self.pause(ROLE_SETTLE).await?;
-        let payload = JoinNetworkRequest {
+        let payload = encode(&JoinNetworkRequest {
             ssid: &network.ssid,
             password: &network.password,
-        }
-        .encode()?;
+        })?;
         for attempt in 0..MAX_JOIN_ATTEMPTS {
             log::info!(
                 "Joining configured router: attempt {}/{}",
@@ -1216,7 +1213,7 @@ impl<I: BleIo> Worker<I> {
             self.send(&request).await?;
             let reply = self.response(&request, JOIN_TIMEOUT).await?;
             let response =
-                CameraReadReply::<CameraRawData>::decode(&reply.payload, &()).map_err(|_| {
+                decode::<CameraReadReply<CameraRawData>>(&reply.payload, ()).map_err(|_| {
                     Error::InvalidReply {
                         command: reply.command,
                         reason: "missing status byte",
@@ -1312,7 +1309,7 @@ fn pairing_approved(message: &Message, requests: &[Message]) -> Result<bool> {
     if requests.iter().any(|request| message.is_reply_to(request)) {
         message.require_success()?;
         let response =
-            CameraReadReply::<PairingResponse>::decode(&message.payload, &()).map_err(|_| {
+            decode::<CameraReadReply<PairingResponse>>(&message.payload, ()).map_err(|_| {
                 Error::InvalidReply {
                     command: message.command,
                     reason: "pairing rejected or missing approval state",
@@ -1339,7 +1336,7 @@ fn pairing_approved(message: &Message, requests: &[Message]) -> Result<bool> {
         && message.command == Command::Wifi(WifiCommand::PairApproval)
     {
         let notification =
-            PairingApprovalNotification::decode(&message.payload, &()).map_err(|_| {
+            decode::<PairingApprovalNotification>(&message.payload, ()).map_err(|_| {
                 Error::InvalidReply {
                     command: message.command,
                     reason: "pairing approval empty, rejected or expired",
@@ -1359,6 +1356,7 @@ fn pairing_approved(message: &Message, requests: &[Message]) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::{decode, encode};
 
     const TEST_IDENTITY: &str = "0123456789abcdef0123456789abcdef";
     const SUCCESS: &[u8] = &[0];
@@ -1370,11 +1368,10 @@ mod tests {
     const TEST_MTU: usize = 247;
 
     fn join_retry_reply() -> Vec<u8> {
-        CameraReadReply::<CameraRawData>::Rejected {
+        encode(&CameraReadReply::<CameraRawData>::Rejected {
             status: JOIN_RETRY_STATUS,
             extension: CameraRawData(vec![JOIN_RETRY_DETAIL]),
-        }
-        .encode()
+        })
         .unwrap()
     }
 
@@ -1385,12 +1382,11 @@ mod tests {
         let mut worker = worker(MockIo::default());
         for sender in [Endpoint::Camera, Endpoint::Session] {
             for flags in [Flags::RESPONSE, Flags::ACKNOWLEDGMENT, Flags::REQUEST] {
-                let payload = ActivationStatusNotification {
+                let payload = encode(&ActivationStatusNotification {
                     unknown: [0xa5; ACTIVATION_UNKNOWN_LENGTH],
                     state: ActivationState::Unknown02,
                     extension: CameraRawData(vec![0xab]),
-                }
-                .encode()
+                })
                 .unwrap();
                 let message = Message {
                     sender,
@@ -1501,13 +1497,12 @@ mod tests {
             wrong.id += 1;
             let mut io = MockIo::default();
             io.incoming
-                .extend([wrong.encode().unwrap(), expected.encode().unwrap()]);
+                .extend([encode(&wrong).unwrap(), encode(&expected).unwrap()]);
             let mut worker = worker(io);
             let actual = worker.query(BleQuery::Capability(query)).await.unwrap();
             assert_eq!(actual, expected);
             assert!(matches!(
-                <CapabilityReply as WireDecode<CapabilityQuery>>::decode(&actual.payload, &query)
-                    .unwrap(),
+                decode::<CapabilityReply>(&actual.payload, (&query,)).unwrap(),
                 CapabilityReply::Rejected { .. }
             ));
             assert_eq!(outgoing(&worker), [request]);
@@ -1556,12 +1551,12 @@ mod tests {
         };
         request.validate(true, true).unwrap();
         let message = request.message(FIRST_BLE_ID);
-        let expected = reply(&message, &[ResponseStatus::from(0xe0).to_wire_u8()]);
+        let expected = reply(&message, &[0xe0]);
         let mut wrong = expected.clone();
         wrong.receiver = Endpoint::Wifi;
         let mut io = MockIo::default();
         io.incoming
-            .extend([wrong.encode().unwrap(), expected.encode().unwrap()]);
+            .extend([encode(&wrong).unwrap(), encode(&expected).unwrap()]);
         let mut active = worker(io);
         assert_eq!(active.raw(request.clone()).await.unwrap(), expected);
         assert_eq!(outgoing(&active), [message]);
@@ -1638,17 +1633,15 @@ mod tests {
                         return Ok(());
                     }
                     response.payload = if request.command == Command::Wifi(WifiCommand::Ssid) {
-                        CameraReadReply::Accepted(WifiSsidResponse {
+                        encode(&CameraReadReply::Accepted(WifiSsidResponse {
                             ssid: TEST_SSID.to_owned(),
                             extension: CameraRawData(vec![]),
-                        })
-                        .encode()?
+                        }))?
                     } else {
-                        CameraReadReply::Accepted(WifiPasswordResponse {
+                        encode(&CameraReadReply::Accepted(WifiPasswordResponse {
                             password: TEST_PASSWORD.to_owned(),
                             extension: CameraRawData(vec![]),
-                        })
-                        .encode()?
+                        }))?
                     };
                 }
                 Command::Wifi(WifiCommand::SetRole) if self.drop_role => return Ok(()),
@@ -1666,7 +1659,7 @@ mod tests {
                 Command::Wifi(WifiCommand::Country) => response.payload = self.health_reply.clone(),
                 _ => return Ok(()),
             }
-            self.incoming.push_back(response.encode()?);
+            self.incoming.push_back(encode(&response)?);
             Ok(())
         }
         async fn next(&mut self) -> Result<Vec<u8>> {
@@ -1776,7 +1769,7 @@ mod tests {
             },
             valid.clone(),
         ] {
-            io.incoming.push_back(message.encode().unwrap());
+            io.incoming.push_back(encode(&message).unwrap());
         }
         let mut worker = worker(io);
         assert_eq!(
@@ -1807,10 +1800,10 @@ mod tests {
             (SERVICE, PAIRING_CHARACTERISTIC, COMMAND_CHARACTERISTIC),
             (0xfff0, 0xfff4, 0xfff5)
         );
-        assert_eq!(BlePairingArmRequest.encode().unwrap(), [1, 0]);
-        assert_eq!(SessionKeepaliveOpenRequest.encode().unwrap(), [4, 0]);
-        assert_eq!(SessionKeepaliveRequest.encode().unwrap(), [1, 1]);
-        assert_eq!(BleWakeRequest.encode().unwrap(), [0, 0, 0, 0]);
+        assert_eq!(encode(&BlePairingArmRequest).unwrap(), [1, 0]);
+        assert_eq!(encode(&SessionKeepaliveOpenRequest).unwrap(), [4, 0]);
+        assert_eq!(encode(&SessionKeepaliveRequest).unwrap(), [1, 1]);
+        assert_eq!(encode(&BleWakeRequest).unwrap(), [0, 0, 0, 0]);
         for (query, endpoint, wire, payload) in [
             (BleQuery::WifiSsid, 0x07, (0x07, 0x07), vec![]),
             (BleQuery::WifiMac, 0x07, (0x07, 0x0c), vec![]),
@@ -1831,15 +1824,17 @@ mod tests {
             ),
         ] {
             let request = query.request(FIRST_BLE_ID).unwrap();
-            assert_eq!(request.receiver.to_wire_u8(), endpoint);
+            assert_eq!(
+                encode(&request.receiver).expect("one-byte enum encodes into memory")[0],
+                endpoint
+            );
             assert_eq!(request.command.wire(), wire);
             assert_eq!(request.payload, payload);
             assert_eq!(request.flags, Flags::REQUEST);
         }
-        let payload = PairingRequest {
+        let payload = encode(&PairingRequest {
             identity: TEST_IDENTITY,
-        }
-        .encode()
+        })
         .unwrap();
         assert_eq!(payload[0] as usize, IDENTITY_LENGTH);
         assert_eq!(&payload[1..=IDENTITY_LENGTH], TEST_IDENTITY.as_bytes());
@@ -1850,7 +1845,7 @@ mod tests {
     fn frame_buffer_preserves_every_fragment_boundary_and_multiple_frames() {
         let request = BleQuery::WifiCountry.request(FIRST_BLE_ID).unwrap();
         let message = reply(&request, SUCCESS);
-        let bytes = message.encode().unwrap();
+        let bytes = encode(&message).unwrap();
         for split in 0..=bytes.len() {
             let mut buffer = FrameBuffer::default();
             let mut messages = buffer.feed(&bytes[..split]).unwrap();
@@ -1953,33 +1948,32 @@ mod tests {
         );
         assert_eq!(
             worker.io.writes[0],
-            (true, BlePairingArmRequest.encode().unwrap())
+            (true, encode(&BlePairingArmRequest).unwrap())
         );
         let messages = outgoing(&worker);
         for (endpoint, command, payload) in [
             (
                 Endpoint::Session,
                 Command::Common(CommonCommand::SessionKeepalive),
-                SessionKeepaliveOpenRequest.encode().unwrap(),
+                encode(&SessionKeepaliveOpenRequest).unwrap(),
             ),
             (
                 Endpoint::Wifi,
                 Command::Wifi(WifiCommand::Pair),
-                PairingRequest {
+                encode(&PairingRequest {
                     identity: TEST_IDENTITY,
-                }
-                .encode()
+                })
                 .unwrap(),
             ),
             (
                 Endpoint::CameraWake,
                 Command::CameraWake(CameraWakeCommand::Wake),
-                BleWakeRequest.encode().unwrap(),
+                encode(&BleWakeRequest).unwrap(),
             ),
             (
                 Endpoint::Wifi,
                 Command::Wifi(WifiCommand::SetRole),
-                vec![WifiRole::Station.to_wire_u8()],
+                vec![encode(&WifiRole::Station).expect("one-byte enum encodes into memory")[0]],
             ),
         ] {
             assert!(messages.iter().any(|message| message.receiver == endpoint
@@ -1989,7 +1983,7 @@ mod tests {
         assert!(
             messages
                 .iter()
-                .filter(|message| message.payload == SessionKeepaliveRequest.encode().unwrap())
+                .filter(|message| message.payload == encode(&SessionKeepaliveRequest).unwrap())
                 .count()
                 >= 10
         );
@@ -1997,11 +1991,10 @@ mod tests {
             .iter()
             .find(|message| message.command == Command::Wifi(WifiCommand::JoinNetwork))
             .unwrap();
-        let expected = JoinNetworkRequest {
+        let expected = encode(&JoinNetworkRequest {
             ssid: TEST_SSID,
             password: TEST_PASSWORD,
-        }
-        .encode()
+        })
         .unwrap();
         assert_eq!(join.payload, expected);
         assert_eq!(
@@ -2012,7 +2005,8 @@ mod tests {
         assert!(worker.io.disconnected);
         assert!(outgoing(&worker).iter().any(|message| message.command
             == Command::Wifi(WifiCommand::SetRole)
-            && message.payload == [WifiRole::Hotspot.to_wire_u8()]));
+            && message.payload
+                == [encode(&WifiRole::Hotspot).expect("one-byte enum encodes into memory")[0]]));
     }
 
     #[tokio::test(start_paused = true)]
@@ -2051,7 +2045,7 @@ mod tests {
         assert!(ack < wake);
         assert_eq!(
             messages[ack].payload,
-            ResponseStatus::Success.encode().unwrap()
+            encode(&ResponseStatus::Success).unwrap()
         );
     }
 
@@ -2118,16 +2112,16 @@ mod tests {
             Endpoint::Wifi,
             FIRST_BLE_ID,
             Command::Wifi(WifiCommand::Password),
-            &WifiPasswordRequest.encode().unwrap(),
+            &encode(&WifiPasswordRequest).unwrap(),
         );
         for payload in [&[][..], &[0][..], &[0, 8, 1][..], REJECTED] {
             let message = reply(&request, payload);
             assert!(
                 message
                     .require_success()
-                    .and_then(|()| CameraReadReply::<WifiPasswordResponse>::decode(
+                    .and_then(|()| decode::<CameraReadReply::<WifiPasswordResponse>>(
                         &message.payload,
-                        &()
+                        ()
                     )
                     .map(|_| ()))
                     .is_err()
@@ -2247,7 +2241,7 @@ mod tests {
         ));
         assert!(cancelled.io.writes.is_empty());
         let mut small = worker(MockIo {
-            mtu: ATT_HEADER + BlePairingArmRequest.encode().unwrap().len() - 1,
+            mtu: ATT_HEADER + encode(&BlePairingArmRequest).unwrap().len() - 1,
             ..MockIo::default()
         });
         assert!(matches!(

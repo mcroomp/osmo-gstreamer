@@ -1,3 +1,4 @@
+use crate::protocol::{decode, encode};
 use crate::{
     control::*,
     preview::*,
@@ -21,9 +22,9 @@ fn duml_messages_round_trip_and_reject_corruption() {
         Command::Wifi(WifiCommand::Country),
         &[],
     );
-    let encoded = message.encode().unwrap();
+    let encoded = encode(&message).unwrap();
     assert_eq!(Message::scan(&encoded), vec![message.clone()]);
-    assert_eq!(Message::decode(&encoded, &()).unwrap(), message);
+    assert_eq!(decode::<Message>(&encoded, ()).unwrap(), message);
 
     let mut corrupt = encoded;
     corrupt[DUML_COMMAND] ^= 1;
@@ -45,6 +46,20 @@ fn control_ack_parses_synthetic_list_and_rejects_malformed_payloads() {
     let mut over_capacity = control_status(left, right, &[]);
     put16(&mut over_capacity, ACK_COUNT, CONTROL_CAPACITY + 1);
     assert!(ControlAck::parse(&over_capacity, AckEncoding::List).is_err());
+}
+
+#[test]
+fn compressed_control_ack_preserves_embedded_data_and_trailing_extension_policy() {
+    let mut payload = vec![0; CONTROL_ACK_OFFSET];
+    payload.extend_from_slice(&[
+        0x00, 0x10, 0x10, 0x10, // Left/right sequence bounds.
+        2, 0, 1, 0, 0x0c, // Count, displacement, packed states.
+        2, 0, 0xaa, 0xbb, 0xcc, // Embedded data and an opaque trailing byte.
+    ]);
+    let ack = ControlAck::parse(&payload, AckEncoding::Compressed).unwrap();
+    assert_eq!((ack.left, ack.right), (0x1000, 0x1010));
+    assert_eq!(ack.missing, [0x1008]);
+    assert!(ControlAck::parse(&payload[..payload.len() - 2], AckEncoding::Compressed).is_err());
 }
 
 fn control_status(left: u16, right: u16, missing: &[u16]) -> Vec<u8> {

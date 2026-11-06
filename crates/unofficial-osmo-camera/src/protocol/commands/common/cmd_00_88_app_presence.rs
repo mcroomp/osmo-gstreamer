@@ -1,15 +1,5 @@
 //! Application-presence command payload.
 
-use crate::{
-    Result,
-    protocol::{WireEncode, WireWriter},
-};
-
-const PRESENCE_PREFIX: [u8; 5] = [0x17, 0, 0x46, 0x23, 0x7c];
-const PRESENCE_NAME: &[u8] = b"APP";
-const PRESENCE_UNKNOWN_LENGTH: usize = 5;
-const PRESENCE_SUFFIX: u8 = 2;
-
 /// Presence body sent to the camera.
 ///
 /// APP -> Presence | 0x00/0x88
@@ -21,15 +11,6 @@ const PRESENCE_SUFFIX: u8 = 2;
 /// }
 /// reply { bytes: [u8; remaining] | unspecified, not awaited }
 /// ```
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, binrw::BinWrite)]
+#[bw(magic = b"\x17\x00\x46\x23\x7cAPP\x00\x00\x00\x00\x00\x02")]
 pub struct AppPresenceRequest;
-
-impl WireEncode for AppPresenceRequest {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        writer.write_bytes(&PRESENCE_PREFIX);
-        writer.write_bytes(PRESENCE_NAME);
-        writer.write_bytes(&[0; PRESENCE_UNKNOWN_LENGTH]);
-        writer.write_u8(PRESENCE_SUFFIX);
-        Ok(())
-    }
-}

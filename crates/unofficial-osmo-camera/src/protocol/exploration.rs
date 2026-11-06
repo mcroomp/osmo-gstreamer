@@ -1,8 +1,9 @@
 //! Low-level requests for bounded protocol operations.
 //! Exact known GET tuples need no raw permission; other requests require explicit approval.
-//! Receiver-08 RTMP operations are unsupported.
+//! RTMP writes use the explicitly approved typed control API.
 
 use super::*;
+use crate::protocol::encode;
 use crate::{
     Error, Result,
     protocol::{
@@ -22,7 +23,6 @@ pub const EXPLORATION_MIN_TIMEOUT: Duration = Duration::from_millis(100);
 pub const EXPLORATION_MAX_TIMEOUT: Duration = Duration::from_secs(30);
 const RTMP_RECEIVER: u8 = 0x08;
 const RTMP_SET: u8 = 0x08;
-const RTMP_COMMAND_078: u8 = 0x78;
 const RTMP_COMMAND_079: u8 = 0x79;
 
 #[derive(Clone)]
@@ -49,15 +49,16 @@ impl ExplorationRequest {
                 reason: "must be 0.1..30 seconds",
             });
         }
-        self.message(MIN_ID).encode()?;
+        encode(&self.message(MIN_ID))?;
         let wire = self.command.wire();
-        if self.receiver.to_wire_u8() == RTMP_RECEIVER
+        if encode(&self.receiver).expect("one-byte enum encodes into memory")[0] == RTMP_RECEIVER
             && (self.command == Command::Camera(CameraCommand::Parameters)
-                || wire == (RTMP_SET, RTMP_COMMAND_078)
+                || wire == (RTMP_SET, 0x78)
                 || wire == (RTMP_SET, RTMP_COMMAND_079))
+            && !self.is_known_read()
         {
             return Err(Error::Unsupported(
-                "receiver-08 RTMP operations are unsupported",
+                "use the typed RTMP control API for media-endpoint writes",
             ));
         }
         if !self.is_known_read() && !(session_approved && request_approved) {
@@ -74,13 +75,16 @@ impl ExplorationRequest {
             return false;
         }
         match (self.receiver, self.command) {
+            (Endpoint::Media, Command::Camera(CameraCommand::Parameters)) => {
+                self.payload == [0, 1, 0x1c, 0]
+            }
             (
                 Endpoint::Wifi,
                 Command::Wifi(WifiCommand::Country | WifiCommand::Ssid | WifiCommand::Mac),
             ) => self.payload.is_empty(),
-            (Endpoint::Wifi, Command::Wifi(WifiCommand::GetRole)) => WifiRoleGet
-                .encode()
-                .is_ok_and(|payload| self.payload == payload),
+            (Endpoint::Wifi, Command::Wifi(WifiCommand::GetRole)) => {
+                encode(&WifiRoleGet).is_ok_and(|payload| self.payload == payload)
+            }
             (Endpoint::Camera, Command::Camera(CameraCommand::Capabilities)) => [
                 CapabilityQuery::Accessories,
                 CapabilityQuery::EiRange,
@@ -88,7 +92,7 @@ impl ExplorationRequest {
                 CapabilityQuery::LensInformation,
             ]
             .iter()
-            .any(|query| query.encode().is_ok_and(|payload| self.payload == payload)),
+            .any(|query| encode(&query).is_ok_and(|payload| self.payload == payload)),
             (Endpoint::Camera, command) => known_camera_read(command, &self.payload),
             _ => false,
         }
@@ -104,7 +108,7 @@ fn known_camera_read(command: Command, payload: &[u8]) -> bool {
             if payload.len() != 4 || payload[..2] != [0, 1] {
                 return false;
             }
-            let parameter = CameraParameter::from(u16::from_le_bytes([payload[2], payload[3]]));
+            let parameter = CameraParameter::from(crate::protocol::u16_at(payload, 2));
             parameter.nano_access().is_some_and(|access| access.can_read())
                 // Preserve legacy read approval without asserting Nano support.
                 || matches!(
@@ -142,6 +146,7 @@ fn known_camera_read(command: Command, payload: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::encode;
 
     fn request() -> ExplorationRequest {
         ExplorationRequest {
@@ -185,7 +190,7 @@ mod tests {
                 query.receiver(),
                 MIN_ID,
                 query.command(),
-                &query.encode().unwrap(),
+                &encode(&query).unwrap(),
             );
             ExplorationRequest {
                 receiver: message.receiver,
@@ -224,12 +229,12 @@ mod tests {
         }
         for command in [
             Command::Camera(CameraCommand::Parameters),
-            Command::from_wire(RTMP_SET, RTMP_COMMAND_078),
+            Command::from_wire(RTMP_SET, 0x78),
             Command::from_wire(RTMP_SET, RTMP_COMMAND_079),
         ] {
             assert!(
                 ExplorationRequest {
-                    receiver: Endpoint::from(RTMP_RECEIVER),
+                    receiver: Endpoint::Media,
                     command,
                     ..request()
                 }
@@ -244,6 +249,39 @@ mod tests {
             }
             .validate(true, true)
             .is_err()
+        );
+    }
+
+    #[test]
+    fn media_state_read_is_exact_and_writes_still_require_the_typed_api() {
+        let read = ExplorationRequest {
+            receiver: Endpoint::Media,
+            command: Command::Camera(CameraCommand::Parameters),
+            payload: vec![0, 1, 0x1c, 0],
+            ..request()
+        };
+        read.validate(false, false).unwrap();
+        for payload in [
+            vec![],
+            vec![0, 1, 0x1c],
+            vec![0, 1, 0x1c, 0, 0],
+            vec![1, 1, 0x1c, 0],
+        ] {
+            assert!(
+                ExplorationRequest {
+                    payload,
+                    ..read.clone()
+                }
+                .validate(true, true)
+                .is_err()
+            );
+        }
+        assert!(
+            !ExplorationRequest {
+                flags: Flags::RESPONSE,
+                ..read
+            }
+            .is_known_read()
         );
     }
 }

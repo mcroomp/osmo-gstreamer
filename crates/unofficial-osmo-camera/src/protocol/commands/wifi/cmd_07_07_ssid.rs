@@ -1,14 +1,12 @@
 //! Wi-Fi SSID GET.
 
 use super::packed_string::{read_packed_string, write_packed_string};
-use crate::{
-    Result,
-    protocol::{
-        Query, WireDecode, WireEncode, WireReader, WireWriter,
-        commands::reply::{CameraRawData, CameraReadReply},
-        identity::{Command, Endpoint, WifiCommand},
-    },
+use crate::protocol::{
+    Query,
+    commands::reply::{CameraRawData, CameraReadReply},
+    identity::{Command, Endpoint, WifiCommand},
 };
+use binrw::{BinRead, BinWrite};
 
 pub const MAX_SSID_BYTES: usize = 32;
 
@@ -22,17 +20,15 @@ pub const MAX_SSID_BYTES: usize = 32;
 ///         length: u8, ssid: [u8; length] | UTF-8
 ///         extension: [u8; remaining] | opaque }
 /// ```
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, BinWrite)]
+#[bw(map = |_: &Self| ())]
 pub struct WifiSsidGet;
-
-impl WireEncode for WifiSsidGet {
-    fn write_to(&self, _writer: &mut WireWriter) -> Result<()> {
-        Ok(())
-    }
-}
 
 impl Query for WifiSsidGet {
     type Response = CameraReadReply<WifiSsidResponse>;
+
+    fn response_args(&self) {}
+
     fn receiver(&self) -> Endpoint {
         Endpoint::Wifi
     }
@@ -50,8 +46,10 @@ impl Query for WifiSsidGet {
 ///         length: u8, ssid: [u8; length] | UTF-8
 ///         extension: [u8; remaining] | opaque }
 /// ```
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, BinRead, BinWrite)]
 pub struct WifiSsidResponse {
+    #[br(parse_with = read_packed_string)]
+    #[bw(write_with = write_packed_string)]
     pub ssid: String,
     pub extension: CameraRawData,
 }
@@ -59,21 +57,5 @@ pub struct WifiSsidResponse {
 impl std::fmt::Debug for WifiSsidResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("WifiSsidResponse { ssid: [REDACTED], extension: [OPAQUE] }")
-    }
-}
-
-impl<Q> WireDecode<Q> for WifiSsidResponse {
-    fn read_from(reader: &mut WireReader<'_>, context: &Q) -> Result<Self> {
-        Ok(Self {
-            ssid: read_packed_string(reader)?,
-            extension: CameraRawData::read_from(reader, context)?,
-        })
-    }
-}
-
-impl WireEncode for WifiSsidResponse {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        write_packed_string(&self.ssid, writer)?;
-        self.extension.write_to(writer)
     }
 }

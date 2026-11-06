@@ -32,16 +32,15 @@ pub mod cmd_02_e5_watermark_get;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::WireDecode;
+    use crate::protocol::{decode, encode};
+
     use crate::protocol::commands::reply::CameraReadReply;
 
     #[test]
     fn scalar_and_fixed_prefix_replies_retain_extensions() {
-        let ae = CameraReadReply::<cmd_02_69_ae_lock_get::CameraAeLockValue>::decode(
-            &[0, 3, 0xaa],
-            &cmd_02_69_ae_lock_get::CameraAeLockGet,
-        )
-        .unwrap();
+        let ae =
+            decode::<CameraReadReply<cmd_02_69_ae_lock_get::CameraAeLockValue>>(&[0, 3, 0xaa], ())
+                .unwrap();
         let CameraReadReply::Accepted(ae) = ae else {
             panic!("expected accepted AE-lock reply");
         };
@@ -49,32 +48,24 @@ mod tests {
         assert_eq!(ae.raw_bytes(), [3, 0xaa]);
 
         assert!(
-            CameraReadReply::<cmd_02_69_ae_lock_get::CameraAeLockValue>::decode(
-                &[0],
-                &cmd_02_69_ae_lock_get::CameraAeLockGet,
-            )
-            .is_err()
+            decode::<CameraReadReply::<cmd_02_69_ae_lock_get::CameraAeLockValue>>(&[0], ())
+                .is_err()
         );
     }
 
     #[test]
     fn raw_caption_and_ae_codes_are_not_normalized_by_boolean_views() {
-        use crate::protocol::WireEncode;
         for code in u8::MIN..=u8::MAX {
             let bytes = [0, code, 0xa5];
-            let caption =
-                CameraReadReply::<cmd_02_63_video_caption_get::CameraVideoCaptionValue>::decode(
-                    &bytes,
-                    &cmd_02_63_video_caption_get::CameraVideoCaptionGet,
-                )
-                .unwrap();
-            let ae = CameraReadReply::<cmd_02_69_ae_lock_get::CameraAeLockValue>::decode(
-                &bytes,
-                &cmd_02_69_ae_lock_get::CameraAeLockGet,
-            )
+            let caption = decode::<
+                CameraReadReply<cmd_02_63_video_caption_get::CameraVideoCaptionValue>,
+            >(&bytes, ())
             .unwrap();
-            assert_eq!(caption.encode().unwrap(), bytes);
-            assert_eq!(ae.encode().unwrap(), bytes);
+            let ae =
+                decode::<CameraReadReply<cmd_02_69_ae_lock_get::CameraAeLockValue>>(&bytes, ())
+                    .unwrap();
+            assert_eq!(encode(&caption).unwrap(), bytes);
+            assert_eq!(encode(&ae).unwrap(), bytes);
             let CameraReadReply::Accepted(caption) = caption else {
                 panic!("expected caption code");
             };

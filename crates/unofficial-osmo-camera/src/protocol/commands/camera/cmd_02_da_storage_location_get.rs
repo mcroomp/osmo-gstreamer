@@ -1,9 +1,9 @@
 //! Storage-location GET payload and response.
+use binrw::{BinRead, BinWrite};
 
 use crate::{
     Error, Result,
     protocol::{
-        WireDecode, WireEncode, WireReader, WireWriter,
         commands::reply::{CameraRawData, camera_read_query},
         identity::{CameraCommand, Command},
     },
@@ -15,7 +15,8 @@ use crate::{
 /// Count is 1..=4. The selected storage is always the first entry; available
 /// alternatives follow. Physical device names for the codes are unspecified.
 /// Received header bytes and trailing data are preserved, not normalized.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, BinRead, BinWrite)]
+#[br(try_map = Self::from_raw)]
 pub struct CameraStorageData {
     raw: CameraRawData,
 }
@@ -44,9 +45,8 @@ impl CameraStorageData {
     }
 }
 
-impl<Q> WireDecode<Q> for CameraStorageData {
-    fn read_from(reader: &mut WireReader<'_>, query: &Q) -> Result<Self> {
-        let raw = CameraRawData::read_from(reader, query)?;
+impl CameraStorageData {
+    fn from_raw(raw: CameraRawData) -> Result<Self> {
         if raw.0.len() < 6
             || !(1..=4).contains(&raw.0[3])
             || raw.0.len() < 5 + usize::from(raw.0[3])
@@ -54,12 +54,6 @@ impl<Q> WireDecode<Q> for CameraStorageData {
             return Err(Error::Protocol("invalid camera storage list"));
         }
         Ok(Self { raw })
-    }
-}
-
-impl WireEncode for CameraStorageData {
-    fn write_to(&self, writer: &mut WireWriter) -> Result<()> {
-        self.raw.write_to(writer)
     }
 }
 
@@ -85,6 +79,7 @@ camera_read_query!(
 mod tests {
     use super::*;
     use crate::protocol::commands::reply::CameraReadReply;
+    use crate::protocol::{decode, encode};
 
     #[test]
     fn selected_storage_is_first_and_count_bounds_the_list() {
@@ -96,7 +91,7 @@ mod tests {
                         .filter(|code| *code != selected)
                         .take(usize::from(count - 1)),
                 );
-                let reply = CameraReadReply::<CameraStorageData>::decode(&bytes, &()).unwrap();
+                let reply = decode::<CameraReadReply<CameraStorageData>>(&bytes, ()).unwrap();
                 let CameraReadReply::Accepted(value) = &reply else {
                     panic!("expected accepted storage list");
                 };
@@ -104,25 +99,25 @@ mod tests {
                 assert_eq!(value.code(), selected);
                 assert_eq!(value.entries(), &bytes[6..]);
                 assert!(value.extension().is_empty());
-                assert_eq!(reply.encode().unwrap(), bytes);
+                assert_eq!(encode(&reply).unwrap(), bytes);
                 for end in 0..bytes.len() {
                     assert!(
-                        CameraReadReply::<CameraStorageData>::decode(&bytes[..end], &()).is_err()
+                        decode::<CameraReadReply::<CameraStorageData>>(&bytes[..end], ()).is_err()
                     );
                 }
             }
         }
         for count in [0, 5, 255] {
             let bytes = [0, 0, 0, 0, count, 0, 1];
-            assert!(CameraReadReply::<CameraStorageData>::decode(&bytes, &()).is_err());
+            assert!(decode::<CameraReadReply::<CameraStorageData>>(&bytes, ()).is_err());
         }
         for bytes in [
             &[0xe3][..],
             &[0xe3, 0xa5][..],
             &[0, 0, 0, 0, 1, 0, 0xff, 0xa5][..],
         ] {
-            let reply = CameraReadReply::<CameraStorageData>::decode(bytes, &()).unwrap();
-            assert_eq!(reply.encode().unwrap(), bytes);
+            let reply = decode::<CameraReadReply<CameraStorageData>>(bytes, ()).unwrap();
+            assert_eq!(encode(&reply).unwrap(), bytes);
             if let CameraReadReply::Accepted(value) = reply {
                 assert_eq!(value.entries(), [0xff]);
                 assert_eq!(value.extension(), [0xa5]);
