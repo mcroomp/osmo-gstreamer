@@ -51,13 +51,20 @@ mod tests {
     use crate::protocol::{
         commands::{
             camera::{
+                cmd_02_0c_playback::PlaybackMode,
+                cmd_02_1a_live_view_quality_set::LiveViewQuality,
+                cmd_02_4c_live_view_output_set::{LcdOutputFormat, LiveViewStreamFormat},
                 cmd_02_8e_parameters::{CameraFieldOfView, CameraStabilizationMode},
+                cmd_02_09_live_view_control::LiveViewControlAction,
                 cmd_02_18_video_format_set::{NanoVideoResolutionCode, VideoFrameRateCode},
                 cmd_02_80_camera_state::NanoCaptureMode,
             },
             common::cmd_00_32_activation_status::ActivationState,
             reply::CameraReadReply,
-            wifi::{cmd_07_45_pair::PairingState, cmd_07_46_pair_approval::PairingApproval},
+            wifi::{
+                cmd_07_39_get_role::WifiRole, cmd_07_45_pair::PairingState,
+                cmd_07_46_pair_approval::PairingApproval,
+            },
         },
         identity::*,
         *,
@@ -115,22 +122,13 @@ mod tests {
 
     #[test]
     fn closed_enums_reject_every_unsupported_code() {
-        use crate::protocol::commands::{
-            camera::{
-                cmd_02_0c_playback::PlaybackMode,
-                cmd_02_1a_live_view_quality_set::LiveViewQuality,
-                cmd_02_4c_live_view_output_set::{LcdOutputFormat, LiveViewStreamFormat},
-                cmd_02_09_live_view_source::LiveViewGate,
-            },
-            wifi::cmd_07_39_get_role::WifiRole,
-        };
         assert_byte_codes::<MediaType>(|byte| [0x11, 0x12, 0x24].contains(&byte));
         assert_byte_codes::<AckEncoding>(|byte| byte <= 1);
         assert_byte_codes::<AvcNal>(|byte| [1, 5, 7, 8, 9].contains(&byte));
         assert_byte_codes::<HevcNal>(|byte| [32, 33, 34].contains(&byte));
         assert_byte_codes::<WifiRole>(|byte| byte <= 1);
         assert_byte_codes::<PlaybackMode>(|byte| byte <= 1);
-        assert_byte_codes::<LiveViewGate>(|byte| [3, 4].contains(&byte));
+        assert_byte_codes::<LiveViewControlAction>(|byte| [3, 4].contains(&byte));
         assert_byte_codes::<LiveViewQuality>(|byte| byte <= 2);
         assert_byte_codes::<LiveViewStreamFormat>(|byte| byte <= 4);
         assert_byte_codes::<LcdOutputFormat>(|byte| byte <= 7);

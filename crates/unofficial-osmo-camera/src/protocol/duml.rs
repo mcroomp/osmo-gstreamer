@@ -69,6 +69,40 @@ pub struct Message {
     pub payload: Vec<u8>,
 }
 
+/// The contiguous command-set, command-ID and payload portion of DUML.
+///
+/// Typed command structs encode this same layout using binrw magic. Raw
+/// messages retain an open command identity and uninterpreted payload.
+#[derive(Clone, Debug, PartialEq, Eq, BinRead, BinWrite)]
+pub struct CommandBody {
+    pub command: Command,
+    #[br(parse_with = binrw::helpers::until_eof)]
+    pub payload: Vec<u8>,
+}
+
+/// Transport-owned DUML metadata, independent of a command's wire magic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MessageContext {
+    pub sender: Endpoint,
+    pub receiver: Endpoint,
+    pub id: u16,
+    pub flags: Flags,
+}
+
+impl MessageContext {
+    pub fn frame<T: for<'a> BinWrite<Args<'a> = ()>>(&self, body: &T) -> Result<Message> {
+        let body = decode::<CommandBody>(&encode(body)?, ())?;
+        Ok(Message {
+            sender: self.sender,
+            receiver: self.receiver,
+            id: self.id,
+            flags: self.flags,
+            command: body.command,
+            payload: body.payload,
+        })
+    }
+}
+
 #[derive(BinRead, BinWrite)]
 #[brw(little)]
 pub(crate) struct DumlPrefix {
@@ -84,7 +118,6 @@ struct DumlFields {
     receiver: Endpoint,
     id: u16,
     flags: Flags,
-    command: Command,
 }
 
 pub(crate) struct MessageMetadata<'a>(&'a Message);
@@ -106,6 +139,40 @@ impl fmt::Display for MessageMetadata<'_> {
 }
 
 impl Message {
+    /// Decode a complete typed command body, including its command magic.
+    pub fn decode_command<T: for<'a> BinRead<Args<'a> = ()>>(&self) -> Result<T> {
+        decode(&encode(&self.command_body())?, ())
+    }
+
+    /// Decode a command-qualified reply while preserving its payload/status codec.
+    pub fn decode_command_reply<C: super::CommandPacket, T: for<'a> BinRead<Args<'a> = ()>>(
+        &self,
+    ) -> Result<T> {
+        Ok(self.decode_command::<super::CommandReply<C, T>>()?.value)
+    }
+
+    pub fn from_command_body<T: for<'a> BinWrite<Args<'a> = ()>>(
+        receiver: Endpoint,
+        id: u16,
+        flags: Flags,
+        body: &T,
+    ) -> Result<Self> {
+        MessageContext {
+            sender: Endpoint::App,
+            receiver,
+            id,
+            flags,
+        }
+        .frame(body)
+    }
+
+    pub fn command_body(&self) -> CommandBody {
+        CommandBody {
+            command: self.command,
+            payload: self.payload.clone(),
+        }
+    }
+
     pub(crate) fn diagnostic_metadata(&self) -> MessageMetadata<'_> {
         MessageMetadata(self)
     }
@@ -190,10 +257,10 @@ impl BinWrite for Message {
             receiver: self.receiver,
             id: self.id,
             flags: self.flags,
-            command: self.command,
         }
         .write_options(&mut frame, Endian::Little, ())?;
-        frame.write_all(&self.payload)?;
+        self.command_body()
+            .write_options(&mut frame, Endian::Little, ())?;
         let checksum = crc16(frame.get_ref());
         checksum.write_options(&mut frame, Endian::Little, ())?;
         writer.write_all(frame.get_ref())?;
@@ -230,7 +297,7 @@ impl BinRead for Message {
         frame[..prefix_bytes.len()].copy_from_slice(&prefix_bytes);
         reader.read_exact(&mut frame[prefix_bytes.len()..])?;
         let fields = DumlFields::read_options(
-            &mut Cursor::new(&frame[prefix_bytes.len()..DUML_PAYLOAD]),
+            &mut Cursor::new(&frame[prefix_bytes.len()..DUML_SET]),
             Endian::Little,
             (),
         )?;
@@ -245,13 +312,18 @@ impl BinRead for Message {
                 Error::Protocol("invalid DUML frame checksum"),
             ));
         }
+        let body = CommandBody::read_options(
+            &mut Cursor::new(&frame[DUML_SET..length - WORD]),
+            Endian::Little,
+            (),
+        )?;
         Ok(Self {
             sender: fields.sender,
             receiver: fields.receiver,
             id: fields.id,
             flags: fields.flags,
-            command: fields.command,
-            payload: frame[DUML_PAYLOAD..length - WORD].to_vec(),
+            command: body.command,
+            payload: body.payload,
         })
     }
 }

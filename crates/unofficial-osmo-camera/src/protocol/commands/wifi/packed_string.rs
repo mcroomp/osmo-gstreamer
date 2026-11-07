@@ -1,5 +1,5 @@
 use crate::{Error, protocol::binrw_error};
-use binrw::{BinRead, BinResult, BinWrite, Endian};
+use binrw::{BinRead, BinResult, BinWrite, Endian, VecArgs};
 use std::io::{Read, Seek, Write};
 
 pub(super) fn write_packed_string<T: AsRef<str>, W: Write + Seek>(
@@ -31,7 +31,7 @@ pub(super) fn read_packed_string<R: Read + Seek>(
     let bytes = Vec::<u8>::read_options(
         reader,
         endian,
-        binrw::VecArgs {
+        VecArgs {
             count: length,
             inner: (),
         },
@@ -43,7 +43,7 @@ pub(super) fn read_packed_string<R: Read + Seek>(
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use binrw::Error as BinrwError;
     use std::io::Cursor;
 
     #[test]
@@ -52,7 +52,7 @@ mod tests {
         writer.set_position(3);
         let error =
             write_packed_string(&"x".repeat(256), &mut writer, Endian::Little, ()).unwrap_err();
-        let binrw::Error::Custom { pos, err } = error else {
+        let BinrwError::Custom { pos, err } = error else {
             panic!("expected a custom length error");
         };
         assert_eq!(pos, 3);

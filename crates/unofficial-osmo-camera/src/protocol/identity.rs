@@ -70,7 +70,8 @@ pub enum CameraCommand {
     #[brw(magic = 0x80u8)]
     State,
     #[brw(magic = 0x09u8)]
-    LiveViewSource,
+    LiveViewControl,
+    /// Encoding-only; device support remains unspecified.
     #[brw(magic = 0x1au8)]
     LiveViewQualitySet,
     #[brw(magic = 0x4cu8)]
@@ -134,8 +135,9 @@ pub enum WifiCommand {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
 pub enum LiveViewCommand {
+    /// Live-view controller actions; the preview sequence requests an I-frame.
     #[brw(magic = 0xa8u8)]
-    StartTransmission,
+    Control,
     Unknown(u8),
 }
 

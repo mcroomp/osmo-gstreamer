@@ -1,6 +1,35 @@
 //! Encoding-only stream and LCD output variants for camera command 0x02/0x4C.
 
-use binrw::{BinRead, BinWrite};
+use binrw::{BinRead, BinWrite, binwrite};
+
+/// APP -> Camera | 0x02/0x4C | request: `[4, 0, 0, format, 0, 0x20]`.
+///
+/// The fixed bytes do not establish dimensions or bitrate. Reply layout,
+/// flags, model support and readback are unspecified. Encoding authorizes no write.
+#[binwrite]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[bw(magic = b"\x02\x4c")]
+pub struct LiveViewStreamOutputSet {
+    #[bw(calc = [4u8, 0u8, 0u8])]
+    prefix: [u8; 3],
+    pub format: LiveViewStreamFormat,
+    #[bw(calc = [0u8, 0x20])]
+    suffix: [u8; 2],
+}
+
+/// APP -> Camera | 0x02/0x4C | request: `[1, format, 0, 0, 0, 0]`.
+///
+/// Receiver selection is model-dependent; flags, reply layout and support
+/// remain unspecified. This is not a read-only query or permission to write.
+#[binwrite]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[bw(magic = b"\x02\x4c")]
+pub struct LcdOutputSet {
+    #[bw(calc = [1u8])]
+    prefix: [u8; 1],
+    #[bw(pad_after = 4)]
+    pub format: LcdOutputFormat,
+}
 
 /// Stream-output labels; pixel dimensions and frame rates remain unresolved.
 ///
@@ -31,61 +60,31 @@ pub enum LcdOutputFormat {
     AutoWithApp = 7,
 }
 
-/// APP -> Camera | 0x02/0x4C | request: `[4, 0, 0, format, 0, 0x20]`.
-///
-/// The fixed bytes do not establish dimensions or bitrate. Reply layout,
-/// flags, model support and readback are unspecified. Encoding authorizes no write.
-#[binrw::binwrite]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[bw(magic = b"\x04\x00\x00")]
-pub struct LiveViewStreamOutputSet {
-    pub format: LiveViewStreamFormat,
-    #[bw(calc = [0u8, 0x20])]
-    suffix: [u8; 2],
-}
-
-/// APP -> Camera | 0x02/0x4C | request: `[1, format, 0, 0, 0, 0]`.
-///
-/// Receiver selection is model-dependent; flags, reply layout and support
-/// remain unspecified. This is not a read-only query or permission to write.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BinWrite)]
-#[bw(magic = 1u8)]
-pub struct LcdOutputSet {
-    #[bw(pad_after = 4)]
-    pub format: LcdOutputFormat,
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::protocol::encode;
+    use super::{
+        super::{
+            cmd_02_1a_live_view_quality_set::{LiveViewQuality, LiveViewQualitySet},
+            cmd_02_09_live_view_control::LiveViewControlRequest,
+        },
+        *,
+    };
+    use crate::protocol::{
+        CommandPacket, ExplorationRequest, Flags, encode,
+        identity::{CameraCommand, Command, Endpoint},
+    };
+    use std::time::Duration;
 
     #[test]
     fn live_view_encoders_never_become_approved_reads() {
-        use super::super::{
-            cmd_02_1a_live_view_quality_set::{LiveViewQuality, LiveViewQualitySet},
-            cmd_02_09_live_view_source::{LiveViewGate, LiveViewToggleRequest},
-        };
-        use crate::protocol::{
-            ExplorationRequest, Flags,
-            identity::{CameraCommand, Command, Endpoint},
-        };
-        use std::time::Duration;
-
         let fixtures = [
             (
-                CameraCommand::LiveViewSource,
-                encode(&LiveViewToggleRequest {
-                    gate: LiveViewGate::Enable,
-                })
-                .unwrap(),
+                CameraCommand::LiveViewControl,
+                CommandPacket::payload(&LiveViewControlRequest::start()).unwrap(),
             ),
             (
-                CameraCommand::LiveViewSource,
-                encode(&LiveViewToggleRequest {
-                    gate: LiveViewGate::Disable,
-                })
-                .unwrap(),
+                CameraCommand::LiveViewControl,
+                CommandPacket::payload(&LiveViewControlRequest::stop()).unwrap(),
             ),
             (
                 CameraCommand::LiveViewQualitySet,

@@ -1,21 +1,7 @@
 //! Marker-qualified activation indication.
 
-use crate::protocol::commands::reply::CameraRawData;
-use binrw::{BinRead, BinWrite};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
-pub enum ActivationState {
-    #[brw(magic = 0u8)]
-    Unknown00,
-    #[brw(magic = 2u8)]
-    Unknown02,
-    Other(u8),
-}
-
-pub const ACTIVATION_MARKER: u8 = 0x33;
-pub const ACTIVATION_MARKER_LENGTH: usize = 2;
-pub const ACTIVATION_STATE_OFFSET: usize = 20;
-pub const ACTIVATION_UNKNOWN_LENGTH: usize = ACTIVATION_STATE_OFFSET - ACTIVATION_MARKER_LENGTH;
+use crate::protocol::commands::reply::RemainingBytes;
+use binrw::{BinRead, BinWrite, binrw};
 
 /// Decode the marker-qualified activation state without interpreting unknown bytes.
 ///
@@ -34,13 +20,31 @@ pub const ACTIVATION_UNKNOWN_LENGTH: usize = ACTIVATION_STATE_OFFSET - ACTIVATIO
 /// The BLE receiver accepts this body by command and marker without imposing
 /// additional sender/flags restrictions. Other bodies remain opaque. No
 /// outbound activation query is defined.
-#[derive(Clone, Debug, PartialEq, Eq, BinRead, BinWrite)]
-#[brw(magic = b"\x33\x33")]
+#[binrw]
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[brw(magic = b"\x00\x32")]
 pub struct ActivationStatusNotification {
+    #[br(temp, assert(marker == [ACTIVATION_MARKER; 2]))]
+    #[bw(calc = [ACTIVATION_MARKER; 2])]
+    marker: [u8; 2],
     pub unknown: [u8; ACTIVATION_UNKNOWN_LENGTH],
     pub state: ActivationState,
-    pub extension: CameraRawData,
+    pub extension: RemainingBytes,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
+pub enum ActivationState {
+    #[brw(magic = 0u8)]
+    Unknown00,
+    #[brw(magic = 2u8)]
+    Unknown02,
+    Other(u8),
+}
+
+pub const ACTIVATION_MARKER: u8 = 0x33;
+pub const ACTIVATION_MARKER_LENGTH: usize = 2;
+pub const ACTIVATION_STATE_OFFSET: usize = 20;
+pub const ACTIVATION_UNKNOWN_LENGTH: usize = ACTIVATION_STATE_OFFSET - ACTIVATION_MARKER_LENGTH;
 
 #[cfg(test)]
 mod tests {
@@ -52,17 +56,20 @@ mod tests {
         let value = ActivationStatusNotification {
             unknown: [0xa5; ACTIVATION_UNKNOWN_LENGTH],
             state: ActivationState::Other(0xff),
-            extension: CameraRawData(vec![0xde, 0xad]),
+            extension: RemainingBytes::<0>::new(vec![0xde, 0xad]).unwrap(),
         };
         let mut bytes = encode(&value).unwrap();
         assert_eq!(
             decode::<ActivationStatusNotification>(&bytes, ()).unwrap(),
             value
         );
-        for length in 0..=ACTIVATION_STATE_OFFSET {
+        for length in 0..=ACTIVATION_STATE_OFFSET + 2 {
             assert!(decode::<ActivationStatusNotification>(&bytes[..length], ()).is_err());
         }
-        bytes[0] = 0;
+        bytes[1] = 0x31;
+        assert!(decode::<ActivationStatusNotification>(&bytes, ()).is_err());
+        bytes[1] = 0x32;
+        bytes[2] = 0;
         assert!(decode::<ActivationStatusNotification>(&bytes, ()).is_err());
     }
 }

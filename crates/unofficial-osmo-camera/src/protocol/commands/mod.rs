@@ -24,11 +24,10 @@ mod tests {
             cmd_00_88_app_presence::AppPresenceRequest,
         },
         gimbal::cmd_03_da_initialize::GimbalInitializeRequest,
-        live_view::cmd_09_a8_start_transmission::StartTransmissionRequest,
+        live_view::cmd_09_a8_live_view_control::LiveViewIFrameRequest,
         wifi::{cmd_07_39_get_role::WifiRoleGet, cmd_07_45_pair::BlePairingArmRequest},
     };
     use crate::protocol::encode;
-
     use binrw::{BinWrite, Endian};
     use std::io::Cursor;
 
@@ -51,21 +50,27 @@ mod tests {
 
     #[test]
     fn fixed_commands_write_exact_bytes_at_nonzero_offsets() {
-        assert_encoding(BleWakeRequest, &[0; 4]);
-        assert_encoding(SessionKeepaliveRequest, &[1, 1]);
-        assert_encoding(SessionKeepaliveOpenRequest, &[4, 0]);
+        assert_encoding(BleWakeRequest::default(), &[0x53, 0x10, 0, 0, 0, 0]);
+        assert_encoding(SessionKeepaliveRequest::default(), &[0, 0x2b, 1, 1]);
+        assert_encoding(SessionKeepaliveOpenRequest::default(), &[0, 0x2b, 4, 0]);
         assert_encoding(
-            AppPresenceRequest,
+            AppPresenceRequest::default(),
             &[
-                0x17, 0, 0x46, 0x23, 0x7c, b'A', b'P', b'P', 0, 0, 0, 0, 0, 2,
+                0, 0x88, 0x17, 0, 0x46, 0x23, 0x7c, b'A', b'P', b'P', 0, 0, 0, 0, 0, 2,
             ],
         );
-        assert_encoding(GimbalInitializeRequest, &[5, 0xff, 0xff, 0xff, 0xff]);
-        assert_encoding(StartTransmissionRequest, &[0, 4, 2, 0, 0, 0, 0, 0, 0, 0]);
-        assert_encoding(WifiRoleGet, &[0]);
+        assert_encoding(
+            GimbalInitializeRequest::default(),
+            &[3, 0xda, 5, 0xff, 0xff, 0xff, 0xff],
+        );
+        assert_encoding(
+            LiveViewIFrameRequest::default(),
+            &[9, 0xa8, 0, 4, 2, 0, 0, 0, 0, 0, 0, 0],
+        );
+        assert_encoding(WifiRoleGet::default(), &[7, 0x39, 0]);
         assert_encoding(BlePairingArmRequest, &[1, 0]);
         for (mode, code) in [(PlaybackMode::Leave, 0), (PlaybackMode::Enter, 1)] {
-            assert_encoding(PlaybackRequest { mode }, &[1, 1, 0, code]);
+            assert_encoding(PlaybackRequest { mode }, &[2, 0x0c, 1, 1, 0, code]);
         }
     }
 
@@ -83,7 +88,7 @@ mod tests {
         {
             assert_encoding(
                 LiveViewStreamOutputSet { format },
-                &[4, 0, 0, code as u8, 0, 0x20],
+                &[2, 0x4c, 4, 0, 0, code as u8, 0, 0x20],
             );
         }
         for (code, format) in [
@@ -99,7 +104,10 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            assert_encoding(LcdOutputSet { format }, &[1, code as u8, 0, 0, 0, 0]);
+            assert_encoding(
+                LcdOutputSet { format },
+                &[2, 0x4c, 1, code as u8, 0, 0, 0, 0],
+            );
         }
     }
 }

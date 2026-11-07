@@ -1,6 +1,6 @@
 use unofficial_osmo_camera::{
     CameraProfile, ControlSession, Error, PreviewCancellation, Result, RtmpConfig,
-    protocol::commands::media::cmd_02_8e_streaming_control::MediaStreamingStateReply,
+    protocol::commands::media::cmd_02_8e_streaming_control::MediaStreamingStateData,
 };
 
 pub(super) enum Action {
@@ -13,7 +13,7 @@ trait RtmpControl {
     fn enable(&mut self) -> Result<()>;
     fn configure(&mut self, settings: &RtmpConfig) -> Result<()>;
     fn start(&mut self) -> Result<()>;
-    fn state(&mut self) -> Result<MediaStreamingStateReply>;
+    fn state(&mut self) -> Result<MediaStreamingStateData>;
     fn stop(&mut self) -> Result<()>;
     fn close(&mut self) -> Result<()>;
 }
@@ -31,7 +31,7 @@ impl RtmpControl for ControlSession {
         self.start_rtmp(true)
     }
 
-    fn state(&mut self) -> Result<MediaStreamingStateReply> {
+    fn state(&mut self) -> Result<MediaStreamingStateData> {
         self.rtmp_state()
     }
 
@@ -112,16 +112,16 @@ fn state(session: &mut impl RtmpControl, label: &str) -> Result<()> {
     println!("{label} {summary}");
     log::info!("{label} {summary}");
     match reply {
-        MediaStreamingStateReply::State(_) => Ok(()),
-        MediaStreamingStateReply::Rejected(_) => {
+        MediaStreamingStateData::State(_) => Ok(()),
+        MediaStreamingStateData::Rejected(_) => {
             Err(Error::Protocol("camera rejected the RTMP state query"))
         }
     }
 }
 
-fn state_summary(reply: &MediaStreamingStateReply) -> String {
+fn state_summary(reply: &MediaStreamingStateData) -> String {
     match reply {
-        MediaStreamingStateReply::State(bytes) => {
+        MediaStreamingStateData::State(bytes) => {
             let hex = bytes
                 .iter()
                 .map(|byte| format!("{byte:02X}"))
@@ -129,7 +129,7 @@ fn state_summary(reply: &MediaStreamingStateReply) -> String {
                 .join(" ");
             format!("RTMP state (9 raw bytes, opaque): {hex}")
         }
-        MediaStreamingStateReply::Rejected(bytes) => match bytes.first() {
+        MediaStreamingStateData::Rejected(bytes) => match bytes.first() {
             Some(status) => format!(
                 "RTMP state rejected: status_byte=0x{status:02X}, reply_length={} (remaining payload omitted)",
                 bytes.len()
@@ -177,12 +177,12 @@ mod tests {
             self.record("start")
         }
 
-        fn state(&mut self) -> Result<MediaStreamingStateReply> {
+        fn state(&mut self) -> Result<MediaStreamingStateData> {
             self.record("state")?;
             Ok(if self.reject_state {
-                MediaStreamingStateReply::Rejected(vec![0xd6])
+                MediaStreamingStateData::Rejected(vec![0xd6])
             } else {
-                MediaStreamingStateReply::State([0; 9])
+                MediaStreamingStateData::State([0; 9])
             })
         }
 
@@ -274,7 +274,7 @@ mod tests {
     #[test]
     fn structured_state_reports_exactly_nine_hex_bytes_without_interpretation() {
         assert_eq!(
-            state_summary(&MediaStreamingStateReply::State([
+            state_summary(&MediaStreamingStateData::State([
                 0, 1, 2, 3, 4, 5, 6, 0xab, 0xff
             ])),
             "RTMP state (9 raw bytes, opaque): 00 01 02 03 04 05 06 AB FF"
@@ -285,11 +285,11 @@ mod tests {
     fn rejected_state_reports_status_without_dumping_unknown_payloads() {
         let mut bytes = vec![0xd6];
         bytes.extend_from_slice(b"synthetic-private-data");
-        let text = state_summary(&MediaStreamingStateReply::Rejected(bytes));
+        let text = state_summary(&MediaStreamingStateData::Rejected(bytes));
         assert!(text.contains("status_byte=0xD6"));
         assert!(!text.contains("synthetic-private-data"));
         assert_eq!(
-            state_summary(&MediaStreamingStateReply::Rejected(vec![])),
+            state_summary(&MediaStreamingStateData::Rejected(vec![])),
             "RTMP state rejected: missing status byte"
         );
     }

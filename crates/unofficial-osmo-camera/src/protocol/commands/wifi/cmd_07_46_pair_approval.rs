@@ -1,21 +1,7 @@
 //! Pairing-approval notification.
 
-use crate::protocol::commands::reply::CameraRawData;
+use crate::protocol::commands::reply::RemainingBytes;
 use binrw::{BinRead, BinWrite};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
-/// Raw decision codes with legacy names, not an authorization result enum.
-///
-/// The current workflow accepts both 0 and 1. Their equivalence as approval
-/// is not established by the byte contract; the names are retained for API
-/// compatibility. Receipt acknowledgment is separate from the decision.
-pub enum PairingApproval {
-    #[brw(magic = 0u8)]
-    Accepted00,
-    #[brw(magic = 1u8)]
-    Accepted01,
-    Unknown(u8),
-}
 
 /// Receive a pairing decision byte, retaining unknown values and trailing bytes.
 ///
@@ -31,7 +17,22 @@ pub enum PairingApproval {
 /// Nano decision output includes codes 0/1/2/5; an optional second byte is
 /// retained without assigning it authorization or readiness semantics.
 #[derive(Clone, Debug, PartialEq, Eq, BinRead, BinWrite)]
+#[brw(magic = b"\x07\x46")]
 pub struct PairingApprovalNotification {
     pub approval: PairingApproval,
-    pub extension: CameraRawData,
+    pub extension: RemainingBytes,
+}
+
+/// Raw decision codes with legacy names, not an authorization result enum.
+///
+/// The current workflow accepts both 0 and 1. Their equivalence as approval
+/// is not established by the byte contract; the names are retained for API
+/// compatibility. Receipt acknowledgment is separate from the decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
+pub enum PairingApproval {
+    #[brw(magic = 0u8)]
+    Accepted00,
+    #[brw(magic = 1u8)]
+    Accepted01,
+    Unknown(u8),
 }

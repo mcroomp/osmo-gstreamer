@@ -3,19 +3,19 @@
 //! Hardware interoperability is unverified. These operations do not provision
 //! an uplink, run a receiver, reconnect, or establish that video was delivered.
 
-use crate::protocol::encode;
 use crate::{
     ControlSession, Error, Result,
     protocol::{
-        ExplorationRequest, Flags,
+        CommandPacket, ExplorationRequest, Flags,
         commands::media::{
             cmd_02_8e_streaming_control::{
-                self, MediaStreamingControl, MediaStreamingStateGet, MediaStreamingStateReply,
+                MediaStreamingControl, MediaStreamingControlRequest, MediaStreamingStateData,
+                MediaStreamingStateGet,
             },
-            cmd_02_e1_broadcast_mode::{self, EnterBroadcastMode},
-            cmd_08_78_streaming_settings::{self, MediaStreamingProfile, MediaStreamingSettings},
+            cmd_02_e1_broadcast_mode::EnterBroadcastMode,
+            cmd_08_78_streaming_settings::{MediaStreamingProfile, MediaStreamingSettings},
         },
-        identity::{Command, Endpoint},
+        identity::Endpoint,
     },
 };
 use std::time::Duration;
@@ -64,14 +64,7 @@ impl RtmpConfig {
     }
 }
 
-pub(crate) fn request<T>(
-    command: Command,
-    payload: &T,
-    approved: bool,
-) -> Result<ExplorationRequest>
-where
-    for<'a> T: binrw::BinWrite<Args<'a> = ()>,
-{
+pub(crate) fn request<T: CommandPacket>(packet: &T, approved: bool) -> Result<ExplorationRequest> {
     if !approved {
         return Err(Error::InvalidConfig {
             field: "RTMP",
@@ -80,9 +73,9 @@ where
     }
     Ok(ExplorationRequest {
         receiver: Endpoint::Media,
-        command,
+        command: packet.command(),
         flags: Flags::REQUEST,
-        payload: encode(&payload)?,
+        payload: packet.payload()?,
         timeout: Duration::from_secs(10),
     })
 }
@@ -94,14 +87,7 @@ impl ControlSession {
     /// arrange network recovery and a usable uplink before configuring/starting.
     /// Failure never retries mode entry or reconnects.
     pub fn enable_rtmp(&mut self, approved: bool) -> Result<()> {
-        self.rtmp_command(
-            request(
-                cmd_02_e1_broadcast_mode::COMMAND,
-                &EnterBroadcastMode,
-                approved,
-            )?,
-            false,
-        )
+        self.rtmp_command(request(&EnterBroadcastMode::default(), approved)?, false)
     }
 
     /// Applies settings in broadcast mode, without starting publication.
@@ -109,7 +95,6 @@ impl ControlSession {
     pub fn configure_rtmp(&mut self, config: &RtmpConfig, approved: bool) -> Result<()> {
         self.rtmp_command(
             request(
-                cmd_08_78_streaming_settings::COMMAND,
                 &MediaStreamingSettings {
                     profile: config.profile.clone(),
                 },
@@ -124,8 +109,9 @@ impl ControlSession {
     pub fn start_rtmp(&mut self, approved: bool) -> Result<()> {
         self.rtmp_command(
             request(
-                cmd_02_8e_streaming_control::COMMAND,
-                &MediaStreamingControl::Start,
+                &MediaStreamingControlRequest {
+                    control: MediaStreamingControl::Start,
+                },
                 approved,
             )?,
             false,
@@ -140,8 +126,9 @@ impl ControlSession {
     pub fn stop_rtmp(&mut self, approved: bool) -> Result<()> {
         self.rtmp_command(
             request(
-                cmd_02_8e_streaming_control::COMMAND,
-                &MediaStreamingControl::StopAndQuit,
+                &MediaStreamingControlRequest {
+                    control: MediaStreamingControl::StopAndQuit,
+                },
                 approved,
             )?,
             true,
@@ -149,15 +136,14 @@ impl ControlSession {
     }
 
     /// Reads the raw structured state. Does not assign a publishing predicate.
-    pub fn rtmp_state(&mut self) -> Result<MediaStreamingStateReply> {
-        self.execute_query(MediaStreamingStateGet)
+    pub fn rtmp_state(&mut self) -> Result<MediaStreamingStateData> {
+        Ok(self.execute_query::<MediaStreamingStateGet>()?.result)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::encode;
 
     #[test]
     fn config_defaults_are_explicit_and_credentials_are_redacted() {
@@ -181,30 +167,28 @@ mod tests {
 
     #[test]
     fn lifecycle_requests_are_approved_bounded_and_media_addressed() {
-        let operations: [(Command, Vec<u8>); 3] = [
-            (
-                cmd_02_e1_broadcast_mode::COMMAND,
-                encode(&EnterBroadcastMode).unwrap(),
-            ),
-            (
-                cmd_02_8e_streaming_control::COMMAND,
-                encode(&MediaStreamingControl::Start).unwrap(),
-            ),
-            (
-                cmd_02_8e_streaming_control::COMMAND,
-                encode(&MediaStreamingControl::StopAndQuit).unwrap(),
-            ),
-        ];
-        for (command, bytes) in operations {
-            #[derive(binrw::BinWrite)]
-            struct Payload(Vec<u8>);
-            let payload = Payload(bytes.clone());
-            assert!(request(command, &payload, false).is_err());
-            let request = request(command, &payload, true).unwrap();
+        fn check<T: crate::protocol::CommandPacket>(body: T, expected: &[u8]) {
+            let command = body.command();
+            assert!(request(&body, false).is_err());
+            let request = request(&body, true).unwrap();
+            assert_eq!(request.command, command);
             assert_eq!(request.receiver, Endpoint::Media);
             assert_eq!(request.flags, Flags::REQUEST);
             assert_eq!(request.timeout, Duration::from_secs(10));
-            assert_eq!(request.payload, bytes);
+            assert_eq!(request.payload, expected);
         }
+        check(EnterBroadcastMode::default(), &[0x1a]);
+        check(
+            MediaStreamingControlRequest {
+                control: MediaStreamingControl::Start,
+            },
+            &[1, 1, 0x1a, 0, 1, 1, 0, 0],
+        );
+        check(
+            MediaStreamingControlRequest {
+                control: MediaStreamingControl::StopAndQuit,
+            },
+            &[1, 1, 0x1a, 0, 1, 2, 0, 0],
+        );
     }
 }
