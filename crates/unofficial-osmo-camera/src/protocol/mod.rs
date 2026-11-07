@@ -5,7 +5,9 @@
 //! interpretations marked as candidates remain unverified for other models,
 //! firmware versions and modes. Unknown fields are preserved where supported.
 
+pub mod capabilities;
 mod codec;
+mod command;
 pub mod commands;
 mod duml;
 mod exploration;
@@ -15,6 +17,7 @@ mod transport;
 
 pub(crate) use codec::{binrw_error, codec_error};
 pub use codec::{decode, encode};
+pub use command::{CommandPacket, CommandReply};
 #[cfg(feature = "ble")]
 pub(crate) use duml::DumlPrefix;
 pub use duml::*;

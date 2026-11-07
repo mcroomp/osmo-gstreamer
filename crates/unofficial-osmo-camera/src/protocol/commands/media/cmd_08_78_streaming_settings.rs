@@ -1,7 +1,20 @@
 //! Streaming settings at media endpoint 0x08, command 08:78.
-use binrw::BinWrite;
 
 use crate::{Error, Result, protocol::identity::Command};
+use binrw::{BinWrite, binwrite};
+use std::fmt::{Debug, Formatter, Result as FmtResult};
+
+/// Operation 0, LE16 profile byte count, then the packed profile.
+#[binwrite]
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[bw(little, magic = b"\x08\x78")]
+pub struct MediaStreamingSettings {
+    #[bw(calc = [0u8])]
+    prefix: [u8; 1],
+    #[bw(try_calc = profile.wire_length())]
+    profile_length: u16,
+    pub profile: MediaStreamingProfile,
+}
 
 pub const COMMAND: Command = Command::Unknown {
     set: 0x08,
@@ -32,7 +45,7 @@ pub enum StreamingResolution {
 /// Unknown fields are explicit, not described as reserved or ignored.
 /// Destination bytes are not NUL-terminated on the wire. This encoder supports
 /// plain addresses only; it does not interpret a JSON destination envelope.
-#[binrw::binwrite]
+#[binwrite]
 #[derive(Clone, PartialEq, Eq)]
 #[bw(
     little,
@@ -58,8 +71,8 @@ pub struct MediaStreamingProfile {
     pub destination: Vec<u8>,
 }
 
-impl std::fmt::Debug for MediaStreamingProfile {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for MediaStreamingProfile {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("MediaStreamingProfile")
             .field("resolution", &self.resolution)
             .field("bitrate_kbps", &self.bitrate_kbps)
@@ -95,14 +108,4 @@ impl MediaStreamingProfile {
         u16::try_from(11 + self.destination.len())
             .map_err(|_| Error::LimitExceeded("streaming profile exceeds 65535 bytes"))
     }
-}
-
-/// Operation 0, LE16 profile byte count, then the packed profile.
-#[binrw::binwrite]
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[bw(little, magic = 0u8)]
-pub struct MediaStreamingSettings {
-    #[bw(try_calc = profile.wire_length())]
-    profile_length: u16,
-    pub profile: MediaStreamingProfile,
 }

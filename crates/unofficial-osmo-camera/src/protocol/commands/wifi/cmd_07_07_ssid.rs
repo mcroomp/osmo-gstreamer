@@ -3,12 +3,11 @@
 use super::packed_string::{read_packed_string, write_packed_string};
 use crate::protocol::{
     Query,
-    commands::reply::{CameraRawData, CameraReadReply},
-    identity::{Command, Endpoint, WifiCommand},
+    commands::reply::{CameraRawData, CommandReadReply},
+    identity::Endpoint,
 };
-use binrw::{BinRead, BinWrite};
-
-pub const MAX_SSID_BYTES: usize = 32;
+use binrw::{BinWrite, binrw};
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 
 /// Read the camera's own Wi-Fi SSID, not its joined-router SSID.
 ///
@@ -20,42 +19,44 @@ pub const MAX_SSID_BYTES: usize = 32;
 ///         length: u8, ssid: [u8; length] | UTF-8
 ///         extension: [u8; remaining] | opaque }
 /// ```
-#[derive(Clone, Copy, Debug, BinWrite)]
-#[bw(map = |_: &Self| ())]
+#[derive(Clone, Copy, Debug, BinWrite, Default)]
+#[bw(magic = b"\x07\x07")]
 pub struct WifiSsidGet;
 
-impl Query for WifiSsidGet {
-    type Response = CameraReadReply<WifiSsidResponse>;
+pub const MAX_SSID_BYTES: usize = 32;
 
-    fn response_args(&self) {}
+impl Query for WifiSsidGet {
+    type Response = CommandReadReply<WifiSsidReply>;
 
     fn receiver(&self) -> Endpoint {
         Endpoint::Wifi
     }
-    fn command(&self) -> Command {
-        Command::Wifi(WifiCommand::Ssid)
-    }
 }
 
-/// Accepted SSID body inside `CameraReadReply<WifiSsidResponse>`.
+/// Accepted SSID body inside `CameraReadReply<WifiSsidReply>`.
 ///
 /// Wifi -> APP | 0x07/0x07 | SSID reply
 ///
 /// ```text
-/// reply { status: u8 | handled by CameraReadReply
+/// reply { status: u8 | handled by CommandReadReply
 ///         length: u8, ssid: [u8; length] | UTF-8
 ///         extension: [u8; remaining] | opaque }
 /// ```
-#[derive(Clone, PartialEq, Eq, BinRead, BinWrite)]
-pub struct WifiSsidResponse {
+#[binrw]
+#[derive(Clone, PartialEq, Eq)]
+#[brw(magic = b"\x07\x07")]
+pub struct WifiSsidReply {
+    #[br(temp, assert(status == 0, "accepted reply requires success status"))]
+    #[bw(calc = 0u8)]
+    status: u8,
     #[br(parse_with = read_packed_string)]
     #[bw(write_with = write_packed_string)]
     pub ssid: String,
     pub extension: CameraRawData,
 }
 
-impl std::fmt::Debug for WifiSsidResponse {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("WifiSsidResponse { ssid: [REDACTED], extension: [OPAQUE] }")
+impl Debug for WifiSsidReply {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        f.write_str("WifiSsidReply { ssid: [REDACTED], extension: [OPAQUE] }")
     }
 }

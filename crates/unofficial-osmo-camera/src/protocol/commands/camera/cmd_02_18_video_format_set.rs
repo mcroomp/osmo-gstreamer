@@ -1,13 +1,34 @@
 //! Recording-format codecs for camera command 0x02/0x18.
 
-use crate::protocol::encode;
-use crate::protocol::{
-    ExplorationRequest, Flags,
-    identity::{CameraCommand, Command, Endpoint},
+use crate::{
+    Error, Result,
+    protocol::{CommandPacket, ExplorationRequest, Flags, identity::Endpoint},
 };
-use crate::{Error, Result};
 use binrw::{BinRead, BinWrite};
 use std::time::Duration;
+
+/// Encodes a recording-format request while preserving selected current fields.
+///
+/// APP -> Camera | 0x02/0x18 | Video format SET
+///
+/// ```text
+/// request {
+///     resolution: u8  | wire resolution identifier
+///     frame_rate: u8  | protocol code
+///     fov: u8
+///     options: le_u16 | low six bits are the speed-ratio code
+/// }
+/// reply { bytes: [u8; remaining] | unspecified }
+/// ```
+///
+/// No default format or read request is supplied. This type only encodes the
+/// five-byte request payload after the two-byte command prefix; framing and
+/// delivery are handled by the transport layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinWrite)]
+#[bw(magic = b"\x02\x18")]
+pub struct VideoFormatSet {
+    format: VideoFormat,
+}
 
 const SPEED_RATIO_MASK: u16 = 0x003f;
 
@@ -246,27 +267,6 @@ impl VideoFormat {
     }
 }
 
-/// Encodes a recording-format request while preserving selected current fields.
-///
-/// APP -> Camera | 0x02/0x18 | Video format SET
-///
-/// ```text
-/// request {
-///     resolution: u8  | wire resolution identifier
-///     frame_rate: u8  | protocol code
-///     fov: u8
-///     options: le_u16 | low six bits are the speed-ratio code
-/// }
-/// reply { bytes: [u8; remaining] | unspecified }
-/// ```
-///
-/// No default format or read request is supplied. This type only encodes the
-/// five-byte request body; command delivery is handled by the transport layer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BinWrite)]
-pub struct VideoFormatSet {
-    format: VideoFormat,
-}
-
 impl VideoFormatSet {
     /// Changes resolution/rate, preserving current FOV and all option bits.
     pub fn from_current(
@@ -306,9 +306,9 @@ impl VideoFormatSet {
     ) -> Result<ExplorationRequest> {
         Ok(ExplorationRequest {
             receiver: Endpoint::Camera,
-            command: Command::Camera(CameraCommand::VideoFormatSet),
+            command: self.command(),
             flags,
-            payload: encode(&self)?,
+            payload: self.payload()?,
             timeout,
         })
     }
@@ -317,7 +317,11 @@ impl VideoFormatSet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{decode, encode};
+    use crate::protocol::{
+        CommandPacket, decode, encode,
+        identity::{CameraCommand, Command},
+    };
+    use std::fmt::Debug;
 
     const CURRENT: [u8; 5] = [0x16, 0x03, 0xa5, 0xff, 0x93];
     const TARGET: VideoResolutionCode = VideoResolutionCode(0x65);
@@ -354,7 +358,7 @@ mod tests {
     fn source_byte_types_round_trip_all_codes_independently() {
         fn assert_byte_round_trip<T>(value: T, byte: u8)
         where
-            T: std::fmt::Debug + PartialEq,
+            T: Debug + PartialEq,
             for<'a> T: BinRead<Args<'a> = ()> + BinWrite<Args<'a> = ()>,
         {
             assert_eq!(decode::<T>(&[byte], ()).unwrap(), value);
@@ -397,11 +401,14 @@ mod tests {
     #[test]
     fn set_preserves_current_fields_and_encodes_wire_codes() {
         let set = VideoFormatSet::from_current(current(), TARGET, VideoFrameRateCode::Fps30);
-        assert_eq!(encode(&set).unwrap(), [0x65, 0x0e, 0xa5, 0xff, 0x93]);
+        assert_eq!(
+            CommandPacket::payload(&set).unwrap(),
+            [0x65, 0x0e, 0xa5, 0xff, 0x93]
+        );
         assert_eq!(set.format().fov, current().fov);
         assert_eq!(set.format().options, current().options);
         assert_eq!(
-            encode(&set.with_fov(VideoFovCode(4))).unwrap(),
+            CommandPacket::payload(&set.with_fov(VideoFovCode(4))).unwrap(),
             [0x65, 0x0e, 0x04, 0xff, 0x93]
         );
     }
@@ -424,7 +431,7 @@ mod tests {
             }
         }
         assert_eq!(
-            encode(&set.with_speed_ratio_code(0x02).unwrap()).unwrap(),
+            CommandPacket::payload(&set.with_speed_ratio_code(0x02).unwrap()).unwrap(),
             [0x65, 0x0e, 0xa5, 0xc2, 0x93]
         );
     }
@@ -441,7 +448,7 @@ mod tests {
             Command::Camera(CameraCommand::VideoFormatSet)
         );
         assert_eq!(request.command.wire(), (0x02, 0x18));
-        assert_eq!(request.payload, encode(&set).unwrap());
+        assert_eq!(request.payload, CommandPacket::payload(&set).unwrap());
         assert!(!request.is_known_read());
         assert!(request.validate(false, false).is_err());
         assert!(request.validate(true, false).is_err());

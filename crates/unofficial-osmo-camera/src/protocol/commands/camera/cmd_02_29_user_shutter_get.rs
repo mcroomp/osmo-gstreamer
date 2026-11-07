@@ -1,9 +1,24 @@
 //! User shutter GET payload.
 
 use crate::protocol::{
-    commands::reply::{CameraRawData, camera_read_query},
-    identity::{CameraCommand, Command},
+    Query,
+    commands::reply::{CameraRawData, CommandReadReply},
+    identity::Endpoint,
 };
+use binrw::{BinWrite, binrw};
+
+/// Read the configured shutter body.
+///
+/// APP -> Camera | 0x02/0x29
+///
+/// ```text
+/// request {}
+/// reply { status: u8, unmapped_prefix: u8, encoded_speed: le_u16,
+///         decimal_digit: u8, extension: [u8; remaining] | opaque }
+/// ```
+#[derive(Clone, Copy, Debug, Default, BinWrite)]
+#[bw(magic = b"\x02\x29")]
+pub struct CameraUserShutterGet;
 
 const SHUTTER_DECIMAL_MAX: u8 = 9;
 const SHUTTER_RECIPROCAL_MASK: u16 = 0x8000;
@@ -31,7 +46,7 @@ pub enum CameraShutterSpeed {
 ///
 /// ```text
 /// reply {
-///     status: u8 | handled by CameraReadReply
+///     status: u8 | handled by CommandReadReply
 ///     unmapped_prefix: u8
 ///     encoded_speed: le_u16 | raw code; physical interpretation unspecified
 ///     decimal_digit: u8 | raw fractional code
@@ -43,16 +58,21 @@ pub enum CameraShutterSpeed {
 /// interpreted. The empty GET uses this four-data-byte layout, distinct from
 /// extended request variants. Shutter interpretation is a legacy compatibility view;
 /// the original fields and extension always round-trip unchanged.
-#[derive(Clone, Debug, PartialEq, Eq, binrw::BinRead, binrw::BinWrite)]
+#[binrw]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[brw(little)]
-pub struct CameraUserShutterData {
+#[brw(magic = b"\x02\x29")]
+pub struct CameraUserShutterReply {
+    #[br(temp, assert(status == 0, "accepted reply requires success status"))]
+    #[bw(calc = 0u8)]
+    status: u8,
     pub unmapped_prefix: u8,
     pub encoded_speed: u16,
     pub decimal_digit: u8,
     pub extension: CameraRawData,
 }
 
-impl CameraUserShutterData {
+impl CameraUserShutterReply {
     /// Apply the legacy reciprocal/direct interpretation without losing wire bytes.
     ///
     /// A zero magnitude or a decimal byte outside `0..=9` is left uninterpreted.
@@ -76,35 +96,28 @@ impl CameraUserShutterData {
     }
 }
 
-camera_read_query!(
-    /// Read the configured shutter body.
-    ///
-    /// APP -> Camera | 0x02/0x29
-    ///
-    /// ```text
-    /// request {}
-    /// reply { status: u8, unmapped_prefix: u8, encoded_speed: le_u16,
-    ///         decimal_digit: u8, extension: [u8; remaining] | opaque }
-    /// ```
-    CameraUserShutterGet,
-    Command::Camera(CameraCommand::UserShutter),
-    &[],
-    CameraUserShutterData
-);
+impl Query for CameraUserShutterGet {
+    type Response = CommandReadReply<CameraUserShutterReply>;
+
+    fn receiver(&self) -> Endpoint {
+        Endpoint::Camera
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{decode, encode};
-
-    use crate::protocol::commands::reply::CameraReadReply;
+    use crate::protocol::{
+        CommandPacket,
+        commands::reply::{CommandReadReply, decode_payload},
+    };
 
     #[test]
     fn shutter_reply_decodes_candidate_value_and_preserves_wire_body() {
         let _query = CameraUserShutterGet;
         let bytes = [0x00, 0x01, 0x19, 0x80, 0x00, 0xAA];
-        let reply = decode::<CameraReadReply<CameraUserShutterData>>(&bytes, ()).unwrap();
-        let CameraReadReply::Accepted(value) = reply else {
+        let reply = decode_payload::<CommandReadReply<CameraUserShutterReply>>(&bytes, ()).unwrap();
+        let CommandReadReply::Accepted(value) = reply else {
             panic!("expected accepted shutter reply");
         };
         assert_eq!(
@@ -116,11 +129,12 @@ mod tests {
         );
         assert_eq!(value.unmapped_prefix, 1);
         assert_eq!(value.extension.0, [0xAA]);
-        assert_eq!(encode(&value).unwrap(), bytes[1..]);
+        assert_eq!(CommandPacket::payload(&value).unwrap()[1..], bytes[1..]);
 
         let direct =
-            decode::<CameraReadReply<CameraUserShutterData>>(&[0, 0, 1, 0, 3], ()).unwrap();
-        let CameraReadReply::Accepted(direct) = direct else {
+            decode_payload::<CommandReadReply<CameraUserShutterReply>>(&[0, 0, 1, 0, 3], ())
+                .unwrap();
+        let CommandReadReply::Accepted(direct) = direct else {
             panic!("expected accepted shutter reply");
         };
         assert_eq!(
@@ -136,23 +150,24 @@ mod tests {
     fn shutter_reply_rejects_truncation_but_retains_uninterpretable_values() {
         let _query = CameraUserShutterGet;
         for bytes in [&[0][..], &[0, 1][..], &[0, 1, 2][..], &[0, 1, 2, 3][..]] {
-            assert!(decode::<CameraReadReply::<CameraUserShutterData>>(bytes, ()).is_err());
+            assert!(decode_payload::<CommandReadReply<CameraUserShutterReply>>(bytes, ()).is_err());
         }
 
         for body in [[1, 0, 0, 0], [1, 0, 1, 0x0A]] {
-            let reply = decode::<CameraReadReply<CameraUserShutterData>>(
+            let reply = decode_payload::<CommandReadReply<CameraUserShutterReply>>(
                 &[&[0][..], &body[..]].concat(),
                 (),
             )
             .unwrap();
-            let CameraReadReply::Accepted(value) = reply else {
+            let CommandReadReply::Accepted(value) = reply else {
                 panic!("expected accepted shutter reply");
             };
             assert_eq!(value.speed(), None);
-            assert_eq!(encode(&value).unwrap(), body);
+            assert_eq!(CommandPacket::payload(&value).unwrap()[1..], body);
         }
 
-        let rejected = decode::<CameraReadReply<CameraUserShutterData>>(b"\xdfopaque", ()).unwrap();
-        assert_eq!(encode(&rejected).unwrap(), b"\xdfopaque");
+        let rejected =
+            decode_payload::<CommandReadReply<CameraUserShutterReply>>(b"\xdfopaque", ()).unwrap();
+        assert_eq!(CommandPacket::payload(&rejected).unwrap(), b"\xdfopaque");
     }
 }

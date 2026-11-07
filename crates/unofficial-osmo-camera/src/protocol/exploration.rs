@@ -3,19 +3,9 @@
 //! RTMP writes use the explicitly approved typed control API.
 
 use super::*;
-use crate::protocol::encode;
 use crate::{
     Error, Result,
-    protocol::{
-        commands::{
-            camera::{
-                cmd_02_8e_parameters_get::CameraParameter,
-                cmd_02_e0_capabilities_get::CapabilityQuery,
-            },
-            wifi::cmd_07_39_get_role::WifiRoleGet,
-        },
-        identity::{CameraCommand, Command, CommonCommand, Endpoint, WifiCommand},
-    },
+    protocol::identity::{CameraCommand, Command, Endpoint},
 };
 use std::time::Duration;
 
@@ -74,79 +64,19 @@ impl ExplorationRequest {
         if self.flags != Flags::REQUEST {
             return false;
         }
-        match (self.receiver, self.command) {
-            (Endpoint::Media, Command::Camera(CameraCommand::Parameters)) => {
-                self.payload == [0, 1, 0x1c, 0]
-            }
-            (
-                Endpoint::Wifi,
-                Command::Wifi(WifiCommand::Country | WifiCommand::Ssid | WifiCommand::Mac),
-            ) => self.payload.is_empty(),
-            (Endpoint::Wifi, Command::Wifi(WifiCommand::GetRole)) => {
-                encode(&WifiRoleGet).is_ok_and(|payload| self.payload == payload)
-            }
-            (Endpoint::Camera, Command::Camera(CameraCommand::Capabilities)) => [
-                CapabilityQuery::Accessories,
-                CapabilityQuery::EiRange,
-                CapabilityQuery::RecommendedEi,
-                CapabilityQuery::LensInformation,
-            ]
-            .iter()
-            .any(|query| encode(&query).is_ok_and(|payload| self.payload == payload)),
-            (Endpoint::Camera, command) => known_camera_read(command, &self.payload),
-            _ => false,
-        }
-    }
-}
-
-fn known_camera_read(command: Command, payload: &[u8]) -> bool {
-    match command {
-        Command::Camera(CameraCommand::Parameters) => {
-            if payload == [0, 2, 0, 0, 1, 0] {
-                return true;
-            }
-            if payload.len() != 4 || payload[..2] != [0, 1] {
-                return false;
-            }
-            let parameter = CameraParameter::from(crate::protocol::u16_at(payload, 2));
-            parameter.nano_access().is_some_and(|access| access.can_read())
-                // Preserve legacy read approval without asserting Nano support.
-                || matches!(
-                    parameter,
-                    CameraParameter::Beauty
-                    | CameraParameter::FpvControl
-                    | CameraParameter::PreviousMode
-                    | CameraParameter::QuickModeSwitch
-                    | CameraParameter::Led
-                    | CameraParameter::ScreenSleep
-                    | CameraParameter::AutoOff
-                    | CameraParameter::SpotMetering
-                    | CameraParameter::CaptureMinimumInterval
-                    | CameraParameter::P2PShare
-                    | CameraParameter::VideoBeautify
-                )
-        }
-        Command::Common(CommonCommand::ModuleVersion)
-        | Command::Camera(
-            CameraCommand::UserIso
-            | CameraCommand::UserShutter
-            | CameraCommand::AeLock
-            | CameraCommand::Audio
-            | CameraCommand::Aeb
-            | CameraCommand::Language
-            | CameraCommand::VideoCaption
-            | CameraCommand::PhotoInterval,
-        ) => payload.is_empty(),
-        Command::Camera(CameraCommand::StorageLocation) => payload == [0; 7],
-        Command::Camera(CameraCommand::Watermark) => payload == [0x20, 0, 0, 0, 0, 0, 0],
-        _ => false,
+        capabilities::is_known_read(self.receiver, self.command, &self.payload)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::encode;
+    use crate::protocol::{
+        commands::camera::cmd_02_e0_capabilities_get::{
+            AccessoriesGet, EiRangeGet, LensInformationGet, RecommendedEiGet,
+        },
+        identity::WifiCommand,
+    };
 
     fn request() -> ExplorationRequest {
         ExplorationRequest {
@@ -180,17 +110,17 @@ mod tests {
             assert!(bad.validate(false, true).is_err());
             bad.validate(true, true).unwrap();
         }
-        for query in [
-            CapabilityQuery::EiRange,
-            CapabilityQuery::RecommendedEi,
-            CapabilityQuery::LensInformation,
-            CapabilityQuery::Accessories,
+        for payload in [
+            EiRangeGet::default().payload().unwrap(),
+            RecommendedEiGet::default().payload().unwrap(),
+            LensInformationGet::default().payload().unwrap(),
+            AccessoriesGet::default().payload().unwrap(),
         ] {
             let message = Message::request(
-                query.receiver(),
+                Endpoint::Camera,
                 MIN_ID,
-                query.command(),
-                &encode(&query).unwrap(),
+                Command::Camera(CameraCommand::Capabilities),
+                &payload,
             );
             ExplorationRequest {
                 receiver: message.receiver,

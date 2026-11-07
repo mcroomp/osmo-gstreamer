@@ -50,23 +50,57 @@ cargo clippy --locked -p unofficial-osmo-camera --all-targets -- -D warnings
 The default workspace member is the base library, so these tests do not need
 GStreamer installed.
 
-The `02:8E` parameter codec exposes `CameraParameter::NANO_PARAMETERS` for
-the Nano 10.00.31.22 profile: 37 non-placeholder IDs, including 29 GET and
-33 SET cases. `nano_access()` distinguishes operation coverage;
-`single_nano()` rejects legacy-only and write-only GETs. Existing legacy
+Model and firmware coverage lives separately from command codecs in
+`protocol::capabilities`. `NANO_10_00_31_22` includes 37 non-placeholder camera
+parameter IDs (29 GET and 33 SET cases), plus 20 exact read contracts across
+camera, Wi-Fi, common and media commands. Parameter entries retain the targeted
+profile evidence; other entries are explicitly compatibility contracts, not
+verified firmware availability. `lookup(endpoint, command, selector)` returns
+operation coverage and evidence. `require_query::<Get<T>>()` rejects
+legacy-only and write-only parameter reads for this profile. Generic
+`Get<T>` and `Set<T>` use the same `Parameter` bounds without enforcing operation
+support. Existing legacy
 names remain compatibility APIs, not evidence of Nano support. Value
 meanings, safe SET payloads and current-state availability remain separate
 questions; no new automatic requests or writes are introduced.
 
-GET replies and checked SET inputs share one lossless `CameraParameterValue`
-enum: `U8(parameter, code)`, `U16(parameter, value)`, `U32(parameter, value)`
-and `Bytes(parameter, bytes)`. Known scalar fields decode to integer shapes;
-structured records, unknown IDs and unexpected widths remain `Bytes`.
-`CameraParameter` is a numeric ID newtype with generated named constants,
-not another enum. Existing names such as `CameraParameter::Eis` retain their
-spelling; `from_id(u16)` and `id()` handle numeric IDs. The macro generates
-constants and scalar-width metadata, not per-parameter payload variants.
-Wire serialization is explicit and little-endian, not a memory-layout cast.
+Each parameter has one payload struct shared by GET and SET, such as
+`EisValue` or `RotationStateValue`. `Get<T>` fixes the requested ID and response
+type; `Set<T>` privately holds a checked payload of the same type. There is no
+large parameter-value enum, optional selector/value union, or separate SET
+payload type. Callers are responsible for selecting supported operations and may
+implement the parameter traits for custom payloads; this does not grant hardware
+authorization or extend the raw-read allowlist. Callers may define independent
+`CameraCapabilities` tables for other model/firmware scopes; missing entries
+remain unknown and never inherit Nano support. Profile selection is explicit,
+not automatic device detection or a persisted credential-profile setting.
+
+GET replies are `CommandReadReply<ParameterReply<T>>`: accepted replies expose
+`value: T`; rejected replies retain status and opaque extensions. The accepted
+envelope requires operation 0, count 1, the type's echoed ID and its established
+payload layout. Unknown codes remain raw, but unexpected widths/layouts now
+return errors instead of silently falling back to an untyped value.
+Raw exploration remains explicit and approval-gated; it is not a typed fallback.
+The fixed legacy two-ID request is `AdvancedLiveReversalGet`, with an
+`AdvancedLiveReversalReply` response containing `advanced_mode` and opaque
+`legacy_value` fields. No runtime-selected batch API is exposed.
+Each parameter value struct owns its complete TLV, with the parameter ID declared as
+binrw `magic` and a checked or calculated length. GET selectors obtain the ID
+through `Parameter::ID`, defaulted from binrw's `WriteMagic` trait.
+The separate capability table records model-specific command/selector coverage
+without coupling codecs to a model; it uses `Parameter::ID` for parameter entries
+and `Query` constants for fixed read requests.
+Wire serialization remains explicit and
+little-endian, not a memory-layout cast.
+
+`RotationStateValue` (`0014`) is read-only.
+Its `RotationStateValue` contains
+`reserved_before`, `orientation_code`, and `reserved_after`; the targeted
+layout is `[0, code, 0]`. This derived orientation is not a raw rotation-lock
+configuration or sensor reading. Physical direction/degree mappings remain
+unspecified, unknown codes remain raw, and no autorotation SET is exposed.
+The former `mode_code`/`device_angle_code`/`sensor_angle_code` field names
+have been replaced to avoid implying those unsupported meanings.
 
 Binary command payloads, numeric wire types, DUML/UDP framing, ACKs and media
 headers use `binrw`. Field types own their wire representation; fixed layouts
@@ -80,62 +114,131 @@ for lossless raw representations and checked conversions.
 The module-version reply reads its fixed fields directly; `product_label()`
 names the text accurately, while `hardware()` remains a compatibility alias.
 
-There are no project-specific wire traits or reader/writer types. Use
+There are no project-specific reader/writer types. Use
 `BinRead`/`BinWrite` with standard cursors for composition. The free boundary
 functions `protocol::encode(&value)` and `protocol::decode::<T>(bytes, args)`
 use those traits directly with little-endian defaults. Encoding returns only
-complete payloads; decoding rejects trailing bytes. Arguments are native binrw
+complete encoded values; decoding rejects trailing bytes. Arguments are native binrw
 arguments: `()` for ordinary payloads or `(&request,)` for contextual replies.
-`Query::response_args()` supplies the matching response arguments.
+Typed DUML command structs encode the contiguous `[command_set, command_id, payload...]`
+DUML body. Their binrw magic contains only `[command_set, command_id]` and
+supplies the default `CommandPacket::COMMAND_ID`. Fixed payload bytes are separate
+calculated fields; fixed read payload constants also feed capability matching.
+Default `CommandPacket` and `Query` trait methods derive routing identity,
+construct requests, expose payload-only bytes
+for raw APIs, and decode replies while checking their command identity.
+`MessageContext` supplies sender, receiver, sequence and flags independently
+of the body; DUML framing calculates length and checksums and composes the
+command body once.
+`Get<T>` and `Set<T>` include the camera command prefix as well as their parameter
+envelope. The application device-info response also encodes its command prefix.
+Startup/write requests, BLE keepalive/setup and notifications follow the same
+command-only magic structure. Raw BLE pairing-arm bytes are a GATT characteristic
+write, not a DUML command, and deliberately have no command prefix. Each command
+module starts with module documentation, followed by imports, then the main
+command struct's documentation and declaration, before supporting value types.
+
+Typed `Query::Response` is the complete command reply. GET and Reply structs
+declare the same two-byte command-only magic; `Query` checks their agreement
+and decodes the complete reply without adding another prefix. Header metadata
+remains separate in `MessageContext`, and status is an ordinary reply field,
+not magic. Command-specific accepted fields live directly in `…Reply` structs,
+without redundant `…Data` holders. `CommandReadReply<T, R = CameraRawData>` wraps
+them in `Accepted(T)` or `Rejected { status, extension }`: rejections preserve
+opaque bytes by default, with a custom rejection type only for a useful,
+established layout. Genuinely reused parameter, accessory and media data types
+remain separate. `CommandReply<C, T>` remains available for raw write acknowledgments.
+Paired read-command types use matching descriptive `…Get` and `…Reply` names
+(for example, `CameraAudioGet` and `CameraAudioReply`). Write requests and
+reusable parameter value types retain their operation-specific names. Sessions use
+`execute_query::<Q>()` with no request argument. Direct `protocol::encode(&query)`
+now returns command bytes plus payload; use `query.payload()` only when an
+explicitly raw API already takes the command separately.
+Command declarations and opaque response structs are explicit; the former
+`camera_read_query!` and `camera_data!` generation macros are removed.
+Command codecs use native binrw fields, calculated constants and lengths,
+and field assertions rather than mapping entire structs through wire tuples.
+Opaque replies keep their raw byte accessors and uninterpreted extensions.
+Custom codecs remain for shared contextual replies and checked packed strings;
+accessory and media-state alternatives use derived binrw enums.
 
 Numeric enums no longer provide generated primitive `From`/`Into`/`TryFrom`
 implementations, and no numeric-enum conversion dependency is required.
-Unsupported closed-enum codes produce `Error::WireCodec`; domain validation
-errors retain their existing library variants. Codec errors retain their source
+Unsupported closed-enum codes and malformed native enum variants produce
+`Error::WireCodec`, including malformed accessory and media-state layouts.
+Branch errors remain available in the codec error's source; directly raised
+domain validation errors retain their existing library variants. Codec errors retain their source
 without displaying potentially sensitive details in the top-level message.
 Frame lengths and counts remain checked before reading variable bodies.
 FEC, incremental framing and H.264 bitstream algorithms remain explicit.
 
 ```rust
 use unofficial_osmo_camera::protocol::commands::camera::cmd_02_8e_parameters::{
-    CameraParameter, CameraParameterSet, CameraParameterValue,
+    EisValue, Get, ParameterReply, Set,
+};
+use unofficial_osmo_camera::{
+    ControlSession, Result,
+    protocol::commands::reply::CommandReadReply,
 };
 
-fn prepare_setting() -> unofficial_osmo_camera::Result<CameraParameterSet> {
-    let value = CameraParameterValue::U8(CameraParameter::Eis, 7);
-    CameraParameterSet::try_from(value)
+fn read_setting(session: &mut ControlSession) -> Result<CommandReadReply<ParameterReply<EisValue>>> {
+    session.execute_query::<Get<EisValue>>()
 }
-// Encode or explicitly authorize transmission separately.
+
+fn write_setting(session: &mut ControlSession, approved: bool) -> Result<()> {
+    session.execute_parameter_set(Set::new(EisValue::new(7)?), approved)
+}
 ```
 
-`CameraParameterSet::try_from` checks write eligibility and code bounds.
-Read-only IDs, wrong shapes/widths and incomplete/asymmetric write contracts are rejected;
-operation coverage alone never enables a new typed write. When migrating from
-the per-parameter enum, supply the ID and wire shape explicitly or use
-`from_raw(parameter, bytes)`. `parameter()` and `value_bytes()` remain available.
-`Bytes` does not bypass scalar or structured-record validation.
-`CameraParameterSet` remains a wrapper, not a separate enum:
-use `value()` or `into_value()` for matching, and clone rather than copy it.
-Existing named setter calls remain compatibility constructors, validating
-when encoded.
+Each writable payload has a `new` constructor beside its struct,
+such as `AddCustomModeValue::new(raw_index, operation)`. These constructors
+are for SET callers only: named arguments build the supported record, including
+its canonical tags and reserved fields. `Set::new(value)` is an infallible
+wrapper: it preserves fields without validation or normalization. Callers
+using public fields or GET values directly are responsible for SET validity.
+Binrw owns GET decoding and the wire layout; it does not call `new` or apply
+SET restrictions.
+Multi-field records expose named fields rather than opaque byte arrays:
+TC uses `TcData::Byte`/`Word`, beauty uses fifteen raw effect values, and
+calibration uses `CalibrationName::new` plus an operation or focal code.
+Raw types without a `Parameter` implementation cannot instantiate `Set<T>`.
+Operation metadata describes established support, not permission to execute.
+Use `Set::value()` or `into_value()` to access
+the payload. Neither wrapping nor encoding reapplies constructor checks;
+wire-length and layout errors still surface during encoding.
+`ControlSession::execute_parameter_set` requires explicit approval on each call
+and accepts only an exact one-byte successful ACK; rejections and malformed
+replies are errors. It does not retry, reconnect or confirm the setting's effect.
+The old `CameraParameter`, `CameraParameterValue`, `CameraParametersGet`,
+`CameraParameterSet` and parameter-specific `set` wrappers are removed.
 
-All 37 catalogue entries document their value shape or an explicit unknown.
-`nano_get_value_length()` describes the fixed GET width when known;
-`nano_checked_set_value_lengths()` identifies **33 available checked SET
-codecs**, with restricted subsets of some write branches. An empty slice means no checked
-codec; `nano_checked_set_value_length()` returns a width only for a single-width
-codec. TC records have two possible widths, selected by their second byte.
+Capability reads also have independent query types: `EiRangeGet`,
+`RecommendedEiGet`, `LensInformationGet` and `AccessoriesGet`.
+For example, `session.execute_query::<AccessoriesGet>()` returns
+`AccessoriesReply`; the first three return status-bearing replies with
+distinct opaque, nonempty value types. Accessories retain outer and inner
+rejections separately and validate operation/selector before interpreting the
+inner status. Outer rejection uses the shared `CameraReadReply::Rejected`;
+inner rejection is `CameraReadReply::Accepted(AccessoriesData::Rejected { .. })`.
+The capability query and value definitions are explicit structs without custom
+macros. The previous `CapabilityQuery` selector enum is removed.
+Both LAN and BLE typed query entry points now take only the query type.
+
+All 37 targeted parameter entries document their value shape or an explicit unknown.
+There are **33 available checked SET codecs**, with restricted subsets of some
+write branches. Fixed record widths are expressed by the binrw payload types.
+TC records have two possible widths, selected by their second byte.
 Covered writes include
 raw audio/mirror codes, bounded image/shutter/recording controls, tagged
 autofocus records, sparse `001F`/`003C` codes and capture-aspect values.
 Capture-aspect SET accepts only 0..=255 despite its four-byte wire width.
-For beauty effects, `CameraParameterValue::beauty_effect([code; 15])` builds
-the complete 62-byte indexed record; `beauty_effect_values()` validates and
-reads that canonical form. Individual effect labels/scales remain unknown,
-and partial beauty patches are not exposed.
+`BeautyEffectValue` carries the complete 62-byte indexed record; checked SET
+requires the canonical count, indices and one-byte entries.
+Individual effect labels/scales remain unknown, and partial beauty patches
+are not exposed.
 
 Additional checked shapes are duration's five four-byte raw codes;
-`short_video_original_duration_raw(u32)`'s flag-1 nine-byte record;
+the flag-1 nine-byte short-video record;
 TC tag 1 with selector 1..=3 and one byte, or selector 4 and four bytes;
 custom-mode `[raw_index, operation_0_to_3]`; storage-sync start
 `[source_0_to_3, destination_0_to_3, 1]` or canonical stop `[0, 0, 2]`;
@@ -160,20 +263,21 @@ behind an exact LE16 data length. Names are nonempty printable ASCII, at most
 checks, not a calibration/file-operation procedure, path policy or provider
 availability guarantee. No apply/rename/delete meanings are assigned.
 
-The four GET-only IDs cannot become SETs. Unknown, unsupported and malformed
-values remain lossless in the shared value enum without granting a checked write.
+The four GET-only IDs cannot become SETs. Unknown codes in supported GET layouts
+remain raw without granting a checked write; unsupported layouts are explicit errors.
 Duration GET retains all four bytes, but only its low word has
 an established conversion. Known widths/codes never imply current-mode
 availability, physical semantics, safe retries or an applied setting.
 
-These compatibility constructors include recording EIS
-(`EisCode`, 0..=7), independent live-view EIS (`LiveViewEisCode`, 0..=7),
-stabilization preference (`StabilizationPreferenceCode`, 0/1), and stream
-quality (`StreamQualityCode`, 0/1/2). Mode labels and availability are not
-inferred from those ranges. The compatibility `EisEnabled(bool)` still emits
-codes 0/1, not a physical on/off guarantee. Nano field-of-view SET codes are
+Checked constructors include recording EIS
+(`EisValue::new`, 0..=7), independent live-view EIS (`LiveViewEisValue::new`, 0..=7),
+stabilization preference (`StabilizationPreferenceValue::new`, 0/1), and stream
+quality (`StreamQualityValue::new`, 0/1/2). Mode labels and availability are not
+inferred from those ranges. To encode a boolean compatibility value, pass
+`u8::from(enabled)` to the relevant constructor; EIS codes 0/1 are not a physical
+on/off guarantee. Nano field-of-view SET codes are
 restricted to 0..=5 and voice-language SET codes to 0/1; invalid values now
-return an error before writing bytes. GET decoding continues to preserve
+return an error at construction. GET decoding continues to preserve
 unknown codes without applying SET limits. These APIs only encode payloads;
 they neither send requests nor authorize changing a camera setting.
 

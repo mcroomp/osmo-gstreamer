@@ -15,7 +15,7 @@ use std::{
 use unofficial_osmo_camera::{
     CameraConfig, CameraProfile, CameraSession, Error as CameraError,
     ble::{BleConfig, BleSession, NetworkCleanup, WifiNetwork},
-    protocol::commands::{reply::CameraReadReply, wifi::cmd_07_0c_mac_get::WifiMacGet},
+    protocol::commands::{reply::CommandReadReply, wifi::cmd_07_0c_mac_get::WifiMacGet},
 };
 
 const CREDENTIALS_DIRECTORY: &str = ".credentials";
@@ -92,9 +92,9 @@ fn associate_camera(
         profile
             .save_to_file(profile_path)
             .map_err(|error| CameraError::io("save the paired camera profile", error))?;
-        match session.execute_query(WifiMacGet)? {
-            CameraReadReply::Accepted(response) => Ok(response.address),
-            CameraReadReply::Rejected { .. } => Err(CameraError::Protocol(
+        match session.execute_query::<WifiMacGet>()? {
+            CommandReadReply::Accepted(response) => Ok(response.address),
+            CommandReadReply::Rejected { .. } => Err(CameraError::Protocol(
                 "camera rejected the Wi-Fi MAC address query",
             )),
         }

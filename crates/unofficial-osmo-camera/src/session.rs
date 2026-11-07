@@ -8,6 +8,7 @@ use crate::{
         commands::{
             camera::{
                 cmd_02_0c_playback::{PlaybackMode, PlaybackRequest},
+                cmd_02_8e_parameters::{Parameter, Set},
                 cmd_02_09_live_view_source::LiveViewSourceRequest,
                 cmd_02_80_camera_state::CameraStateNotification,
             },
@@ -330,16 +331,57 @@ impl ControlSession {
     }
 
     /// Executes one typed query over this owner's control session.
-    pub fn execute_query<Q: Query>(&mut self, query: Q) -> Result<Q::Response> {
+    pub fn execute_query<Q: Query>(&mut self) -> Result<Q::Response> {
+        let query = Q::default();
+        let message = query.request(MIN_ID)?;
         let request = ExplorationRequest {
-            receiver: query.receiver(),
-            command: query.command(),
+            receiver: message.receiver,
+            command: message.command,
             flags: Flags::REQUEST,
-            payload: encode(&query)?,
+            payload: message.payload,
             timeout: query.timeout(),
         };
         let reply = self.request_raw(request, false, false)?;
-        decode::<Q::Response>(&reply.payload, query.response_args())
+        query.decode_reply(&reply)
+    }
+
+    /// Executes one camera parameter SET with per-operation approval.
+    ///
+    /// A successful ACK does not prove the requested setting took effect.
+    /// No automatic retries, reconnects or lifecycle changes are performed.
+    pub fn execute_parameter_set<T: Parameter>(
+        &mut self,
+        setting: Set<T>,
+        approved: bool,
+    ) -> Result<()> {
+        if !approved {
+            return Err(Error::InvalidConfig {
+                field: "camera parameter SET",
+                reason: "setting changes require explicit approval for each operation",
+            });
+        }
+        let message =
+            Message::from_command_body(Endpoint::Camera, MIN_ID, Flags::REQUEST, &setting)?;
+        let command = message.command;
+        let request = ExplorationRequest {
+            receiver: Endpoint::Camera,
+            command,
+            flags: Flags::REQUEST,
+            payload: message.payload,
+            timeout: Duration::from_secs(10),
+        };
+        let reply = self.request_raw(request, true, true)?;
+        if reply.payload.len() != 1 {
+            return Err(Error::InvalidReply {
+                command,
+                reason: "parameter SET requires exactly one status byte",
+            });
+        }
+        let status = decode::<ResponseStatus>(&reply.payload, ())?;
+        if status != ResponseStatus::Success {
+            return Err(Error::CameraRejected { command, status });
+        }
+        Ok(())
     }
 
     pub fn close(&mut self) -> Result<()> {
@@ -371,12 +413,19 @@ mod rtmp_api_tests {
     use crate::{
         RtmpConfig, StreamingResolution,
         protocol::commands::media::{
-            cmd_02_8e_streaming_control::{self, MediaStreamingStateReply},
+            cmd_02_8e_streaming_control::{self, MediaStreamingStateData},
             cmd_02_e1_broadcast_mode, cmd_08_78_streaming_settings,
         },
     };
 
     fn mock_session(expected: Vec<(Command, Vec<u8>, Vec<u8>)>) -> ControlSession {
+        mock_session_for(Endpoint::Media, expected)
+    }
+
+    fn mock_session_for(
+        endpoint: Endpoint,
+        expected: Vec<(Command, Vec<u8>, Vec<u8>)>,
+    ) -> ControlSession {
         let (commands, work) = mpsc::sync_channel::<ControlWork>(1);
         let closing = Arc::new(AtomicBool::new(false));
         let worker_closing = closing.clone();
@@ -390,7 +439,7 @@ mod rtmp_api_tests {
                     }) => {
                         let (command, payload, reply) =
                             expected.pop_front().expect("unexpected request");
-                        assert_eq!(request.receiver, Endpoint::Media);
+                        assert_eq!(request.receiver, endpoint);
                         assert_eq!(request.command, command);
                         assert_eq!(request.flags, Flags::REQUEST);
                         assert_eq!(request.payload, payload);
@@ -398,7 +447,7 @@ mod rtmp_api_tests {
                         let sent = request.message(123);
                         response
                             .send(Ok(Some(Message {
-                                sender: Endpoint::Media,
+                                sender: endpoint,
                                 receiver: sent.sender,
                                 flags: Flags::RESPONSE,
                                 payload: reply,
@@ -423,6 +472,110 @@ mod rtmp_api_tests {
             preview_commands: Arc::new(Mutex::new(Vec::new())),
             preview_requested: false,
             rtmp_requested: false,
+        }
+    }
+
+    #[test]
+    fn typed_parameter_read_and_write_use_one_payload_type_and_no_extra_requests() {
+        use crate::protocol::commands::{
+            camera::cmd_02_8e_parameters::{EisValue, Get},
+            reply::CommandReadReply,
+        };
+        let command = Command::Camera(CameraCommand::Parameters);
+        let mut session = mock_session_for(
+            Endpoint::Camera,
+            vec![
+                (command, vec![0, 1, 8, 0], vec![0, 0, 1, 8, 0, 1, 7]),
+                (command, vec![1, 1, 8, 0, 1, 6], vec![0]),
+            ],
+        );
+        let CommandReadReply::Accepted(reply) = session.execute_query::<Get<EisValue>>().unwrap()
+        else {
+            panic!("expected parameter value");
+        };
+        assert_eq!(reply.value.code, 7);
+        session
+            .execute_parameter_set(Set::new(EisValue::new(6).unwrap()), true)
+            .unwrap();
+        session.close().unwrap();
+    }
+
+    #[test]
+    fn typed_parameter_write_requires_approval_before_sending() {
+        use crate::protocol::commands::camera::cmd_02_8e_parameters::EisValue;
+        let mut session = mock_session_for(Endpoint::Camera, vec![]);
+        assert!(matches!(
+            session.execute_parameter_set(Set::new(EisValue::new(7).unwrap()), false),
+            Err(Error::InvalidConfig {
+                field: "camera parameter SET",
+                ..
+            })
+        ));
+        session.close().unwrap();
+    }
+
+    #[test]
+    fn capability_query_types_select_distinct_requests_and_responses() {
+        use crate::protocol::commands::{
+            camera::cmd_02_e0_capabilities_get::{
+                AccessoriesData, AccessoriesGet, EiRangeGet, LensInformationGet, RecommendedEiGet,
+            },
+            reply::CameraReadReply,
+        };
+        let command = Command::Camera(CameraCommand::Capabilities);
+        let mut session = mock_session_for(
+            Endpoint::Camera,
+            vec![
+                (command, vec![2, 1, 1], vec![0, 0x11]),
+                (command, vec![2, 1, 2], vec![0, 0x22]),
+                (command, vec![2, 1, 3], vec![0, 0x33]),
+                (command, vec![2, 1, 4], vec![0, 2, 0, 4, 0xa5, 0x82]),
+            ],
+        );
+        let crate::protocol::commands::reply::CommandReadReply::Accepted(range) =
+            session.execute_query::<EiRangeGet>().unwrap()
+        else {
+            panic!("expected range");
+        };
+        let crate::protocol::commands::reply::CommandReadReply::Accepted(recommended) =
+            session.execute_query::<RecommendedEiGet>().unwrap()
+        else {
+            panic!("expected recommended EI");
+        };
+        let crate::protocol::commands::reply::CommandReadReply::Accepted(lens) =
+            session.execute_query::<LensInformationGet>().unwrap()
+        else {
+            panic!("expected lens information");
+        };
+        let CameraReadReply::Accepted(AccessoriesData::Accepted(accessories)) =
+            session.execute_query::<AccessoriesGet>().unwrap().result
+        else {
+            panic!("expected accessories");
+        };
+        assert_eq!(range.raw_bytes(), [0x11]);
+        assert_eq!(recommended.raw_bytes(), [0x22]);
+        assert_eq!(lens.raw_bytes(), [0x33]);
+        assert_eq!(accessories.raw_flags, 0x82);
+        session.close().unwrap();
+    }
+
+    #[test]
+    fn typed_parameter_write_never_treats_rejected_or_malformed_ack_as_success() {
+        use crate::protocol::commands::camera::cmd_02_8e_parameters::EisValue;
+        let command = Command::Camera(CameraCommand::Parameters);
+        for reply in [vec![], vec![0xd6], vec![0, 1], vec![0, 0, 1, 8, 0, 1, 7]] {
+            let rejected = reply == [0xd6];
+            let mut session = mock_session_for(
+                Endpoint::Camera,
+                vec![(command, vec![1, 1, 8, 0, 1, 7], reply)],
+            );
+            let result = session.execute_parameter_set(Set::new(EisValue::new(7).unwrap()), true);
+            if rejected {
+                assert!(matches!(result, Err(Error::CameraRejected { .. })));
+            } else {
+                assert!(matches!(result, Err(Error::InvalidReply { .. })));
+            }
+            session.close().unwrap();
         }
     }
 
@@ -461,7 +614,7 @@ mod rtmp_api_tests {
         session.start_rtmp(true).unwrap();
         assert_eq!(
             session.rtmp_state().unwrap(),
-            MediaStreamingStateReply::State([0, 1, 2, 3, 4, 5, 6, 7, 8])
+            MediaStreamingStateData::State([0, 1, 2, 3, 4, 5, 6, 7, 8])
         );
         session.stop_rtmp(true).unwrap();
         assert!(!session.rtmp_requested);
@@ -795,14 +948,15 @@ impl Link {
         log::debug!("TCP pairing socket connected");
         tcp.set_write_timeout(Some(TCP_TIMEOUT))
             .map_err(|error| Error::io("set the TCP write deadline", error))?;
-        let pairing = Message::request(
-            Endpoint::Wifi,
-            PAIRING_ID,
-            Command::Wifi(WifiCommand::Pair),
-            &encode(&PairingRequest {
-                identity: &identity,
-            })?,
-        );
+        let pairing = crate::protocol::MessageContext {
+            sender: Endpoint::App,
+            receiver: Endpoint::Wifi,
+            id: PAIRING_ID,
+            flags: Flags::REQUEST,
+        }
+        .frame(&PairingRequest {
+            identity: &identity,
+        })?;
         let pairing_bytes = encode(&pairing)?;
         tcp.write_all(&pairing_bytes)
             .map_err(|error| Error::io("write the TCP pairing request", error))?;
@@ -949,8 +1103,37 @@ impl Link {
         let bytes = self.sender.send(message, self.session)?;
         self.send_packet(&bytes)
     }
-    fn command(&mut self, endpoint: Endpoint, command: Command, payload: &[u8]) -> Result<Message> {
-        self.command_with_flags(endpoint, command, payload, Flags::REQUEST)
+    fn command_packet<T: crate::protocol::CommandPacket>(
+        &mut self,
+        endpoint: Endpoint,
+        body: &T,
+    ) -> Result<Message> {
+        self.check()?;
+        let id = self.next_id;
+        self.next_id = if id == MAX_ID { MIN_ID } else { id + 1 };
+        let message = body.frame(crate::protocol::MessageContext {
+            sender: Endpoint::App,
+            receiver: endpoint,
+            id,
+            flags: Flags::REQUEST,
+        })?;
+        self.send_message(message.clone())?;
+        Ok(message)
+    }
+
+    fn request_command<T: crate::protocol::CommandPacket>(
+        &mut self,
+        endpoint: Endpoint,
+        body: &T,
+    ) -> Result<()> {
+        self.exchange_request(ExplorationRequest {
+            receiver: endpoint,
+            command: body.command(),
+            payload: body.payload()?,
+            flags: Flags::REQUEST,
+            timeout: REPLY_TIMEOUT,
+        })?
+        .require_success()
     }
     fn command_with_flags(
         &mut self,
@@ -1038,11 +1221,7 @@ impl Link {
         }
     }
     fn presence(&mut self) -> Result<()> {
-        self.command(
-            Endpoint::Presence,
-            Command::Common(CommonCommand::AppPresence),
-            &encode(&AppPresenceRequest)?,
-        )?;
+        self.command_packet(Endpoint::Presence, &AppPresenceRequest::default())?;
         self.last_presence = Instant::now();
         Ok(())
     }
@@ -1088,12 +1267,13 @@ impl Link {
         }
         self.registered = true;
         log::debug!("Camera registration completed");
-        self.command_with_flags(
+        let body = Message::from_command_body(
             Endpoint::DeviceInfo,
-            Command::Common(CommonCommand::DeviceInfo),
-            &encode(&AppDeviceInfoResponse)?,
+            MIN_ID,
             Flags::RESPONSE,
+            &AppDeviceInfoResponse::default(),
         )?;
+        self.command_with_flags(body.receiver, body.command, &body.payload, body.flags)?;
         self.pump(REGISTRATION_WINDOW)?;
         self.presence()?;
         self.pump(REGISTRATION_WINDOW)?;
@@ -1103,30 +1283,26 @@ impl Link {
         if self.preview.is_some() || self.playback_requested {
             return Err(Error::InvalidState("preview lifecycle is already active"));
         }
-        self.command(
-            Endpoint::Gimbal,
-            Command::Gimbal(GimbalCommand::Initialize),
-            &encode(&GimbalInitializeRequest)?,
-        )?;
+        self.command_packet(Endpoint::Gimbal, &GimbalInitializeRequest::default())?;
         self.pump(REGISTRATION_WINDOW)?;
         let mut playback = false;
         log::debug!("Waiting for camera playback-mode confirmation");
         for _ in 0..PLAYBACK_ATTEMPTS {
             self.presence()?;
             self.playback_requested = true;
-            let request = self.command(
+            let request = self.command_packet(
                 Endpoint::Camera,
-                Command::Camera(CameraCommand::Playback),
-                &encode(&PlaybackRequest {
+                &PlaybackRequest {
                     mode: PlaybackMode::Enter,
-                })?,
+                },
             )?;
             self.pump(PLAYBACK_WINDOW)?;
             for message in &self.backlog {
                 if message.sender == Endpoint::Camera
                     && message.receiver == Endpoint::App
                     && message.command == Command::Camera(CameraCommand::State)
-                    && decode::<CameraStateNotification>(&message.payload, ())
+                    && message
+                        .decode_command::<CameraStateNotification>()
                         .is_ok_and(|state| state.playback_mode_active())
                 {
                     playback = true;
@@ -1146,25 +1322,16 @@ impl Link {
             });
         }
         log::debug!("Camera playback mode confirmed");
-        self.request(
+        self.request_command(
             Endpoint::Camera,
-            Command::Camera(CameraCommand::Playback),
-            &encode(&PlaybackRequest {
+            &PlaybackRequest {
                 mode: PlaybackMode::Leave,
-            })?,
+            },
         )?;
-        self.request(
-            Endpoint::Camera,
-            Command::Camera(CameraCommand::LiveViewSource),
-            &encode(&LiveViewSourceRequest)?,
-        )?;
+        self.request_command(Endpoint::Camera, &LiveViewSourceRequest::default())?;
         self.preview = Some(PreviewReceiver::new(self.session));
         self.last_frame = Instant::now();
-        self.request(
-            Endpoint::LiveView,
-            Command::LiveView(LiveViewCommand::StartTransmission),
-            &encode(&StartTransmissionRequest)?,
-        )?;
+        self.request_command(Endpoint::LiveView, &StartTransmissionRequest::default())?;
         self.deadline = None;
         Ok(())
     }
@@ -1301,13 +1468,12 @@ impl Link {
                 && message.flags == Flags::REQUEST
                 && message.command == Command::Common(CommonCommand::DeviceInfo)
             {
-                let mut reply = Message::request(
+                let reply = Message::from_command_body(
                     Endpoint::DeviceInfo,
                     message.id,
-                    Command::Common(CommonCommand::DeviceInfo),
-                    &encode(&AppDeviceInfoResponse)?,
-                );
-                reply.flags = Flags::ACKNOWLEDGMENT;
+                    Flags::ACKNOWLEDGMENT,
+                    &AppDeviceInfoResponse::default(),
+                )?;
                 if !self.sender.has_reply(&reply)
                     && !self.deferred.iter().any(|queued| queued.id == reply.id)
                 {
@@ -1434,19 +1600,17 @@ impl Link {
         log::debug!("Stopping LAN preview with playback cleanup");
         let deadline = self.deadline;
         self.deadline = Some(Instant::now() + CLEANUP_TIMEOUT);
-        let restore = self.request(
+        let restore = self.request_command(
             Endpoint::Camera,
-            Command::Camera(CameraCommand::Playback),
-            &encode(&PlaybackRequest {
+            &PlaybackRequest {
                 mode: PlaybackMode::Enter,
-            })?,
+            },
         );
-        let release = self.request(
+        let release = self.request_command(
             Endpoint::Camera,
-            Command::Camera(CameraCommand::Playback),
-            &encode(&PlaybackRequest {
+            &PlaybackRequest {
                 mode: PlaybackMode::Leave,
-            })?,
+            },
         );
         self.preview = None;
         self.deadline = deadline;

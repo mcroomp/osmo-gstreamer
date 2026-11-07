@@ -15,23 +15,29 @@ mod packed_string;
 mod tests {
     use super::*;
     use crate::protocol::{
-        Query,
-        commands::reply::{CameraRawData, CameraReadReply},
+        CommandPacket, ExplorationRequest, Flags, Message, Query,
+        commands::reply::{CameraRawData, CameraReadReply, CommandReadReply, decode_payload},
+        decode, encode,
         identity::{Command, Endpoint, WifiCommand},
     };
-    use crate::protocol::{decode, encode};
+    use binrw::Endian;
+    use cmd_07_0c_mac_get::WifiMacReply;
+    use cmd_07_0e_password::WifiPasswordReply;
+    use cmd_07_07_ssid::WifiSsidReply;
+    use cmd_07_45_pair::PairingResponse;
+    use cmd_07_46_pair_approval::PairingApprovalNotification;
+    use std::{io::Cursor, time::Duration};
 
     #[test]
     fn packed_strings_and_pairing_payloads_preserve_lengths_and_bytes() {
-        let mut writer = std::io::Cursor::new(Vec::new());
-        packed_string::write_packed_string(&"osmo", &mut writer, binrw::Endian::Little, ())
-            .unwrap();
+        let mut writer = Cursor::new(Vec::new());
+        packed_string::write_packed_string(&"osmo", &mut writer, Endian::Little, ()).unwrap();
         assert_eq!(writer.into_inner(), [4, b'o', b's', b'm', b'o']);
         assert_eq!(
-            encode(&cmd_07_45_pair::PairingRequest { identity: "id" }).unwrap(),
+            CommandPacket::payload(&cmd_07_45_pair::PairingRequest { identity: "id" }).unwrap(),
             [2, b'i', b'd', 4, b'o', b's', b'm', b'o']
         );
-        let payload = encode(&cmd_07_47_join_network::JoinNetworkRequest {
+        let payload = CommandPacket::payload(&cmd_07_47_join_network::JoinNetworkRequest {
             ssid: "net",
             password: "password",
         })
@@ -58,15 +64,12 @@ mod tests {
 
     #[test]
     fn wifi_queries_and_writes_follow_read_policy() {
-        use crate::protocol::{ExplorationRequest, Flags};
-        use std::time::Duration;
-
         fn check<Q: Query>(query: Q) {
             let request = ExplorationRequest {
                 receiver: query.receiver(),
                 command: query.command(),
                 flags: Flags::REQUEST,
-                payload: encode(&query).unwrap(),
+                payload: query.payload().unwrap(),
                 timeout: Duration::from_secs(1),
             };
             assert!(request.is_known_read());
@@ -75,11 +78,11 @@ mod tests {
         check(cmd_07_07_ssid::WifiSsidGet);
         check(cmd_07_0c_mac_get::WifiMacGet);
         check(cmd_07_19_country_get::WifiCountryGet);
-        check(cmd_07_39_get_role::WifiRoleGet);
+        check(cmd_07_39_get_role::WifiRoleGet::default());
         for (command, payload) in [
             (
                 WifiCommand::Password,
-                encode(&cmd_07_0e_password::WifiPasswordRequest).unwrap(),
+                encode(&cmd_07_0e_password::WifiPasswordGet).unwrap(),
             ),
             (
                 WifiCommand::SetRole,
@@ -115,68 +118,69 @@ mod tests {
 
     #[test]
     fn string_responses_preserve_tails_and_rejections() {
-        use cmd_07_0e_password::WifiPasswordResponse;
-        use cmd_07_07_ssid::WifiSsidResponse;
-
         let bytes = b"\x00\x03net\xff\xab";
-        let reply = decode::<CameraReadReply<WifiSsidResponse>>(bytes, ()).unwrap();
-        assert_eq!(encode(&reply).unwrap(), bytes);
-        let CameraReadReply::Accepted(value) = reply else {
+        let reply = decode_payload::<CommandReadReply<WifiSsidReply>>(bytes, ()).unwrap();
+        assert_eq!(CommandPacket::payload(&reply).unwrap(), bytes);
+        let CommandReadReply::Accepted(value) = reply else {
             panic!("expected accepted")
         };
         assert_eq!(value.ssid, "net");
         assert_eq!(value.extension.0, [0xff, 0xab]);
-        let reply = decode::<CameraReadReply<WifiPasswordResponse>>(bytes, ()).unwrap();
-        assert_eq!(encode(&reply).unwrap(), bytes);
+        let reply = decode_payload::<CommandReadReply<WifiPasswordReply>>(bytes, ()).unwrap();
+        assert_eq!(CommandPacket::payload(&reply).unwrap(), bytes);
         assert!(!format!("{reply:?}").contains("net"));
         for bytes in [&[][..], &[0][..], &[0, 3, b'n'][..], &[0, 1, 0xff][..]] {
-            assert!(decode::<CameraReadReply::<WifiSsidResponse>>(bytes, ()).is_err());
-            assert!(decode::<CameraReadReply::<WifiPasswordResponse>>(bytes, ()).is_err());
+            assert!(decode_payload::<CommandReadReply<WifiSsidReply>>(bytes, ()).is_err());
+            assert!(decode_payload::<CommandReadReply<WifiPasswordReply>>(bytes, ()).is_err());
         }
         for status in u8::MIN..=u8::MAX {
             if status == 0 {
                 continue;
             }
             let bytes = [status, 0xff, 0xab];
-            let reply = decode::<CameraReadReply<WifiPasswordResponse>>(&bytes, ()).unwrap();
-            assert!(matches!(reply, CameraReadReply::Rejected { .. }));
-            assert_eq!(encode(&reply).unwrap(), bytes);
+            let reply = decode_payload::<CommandReadReply<WifiPasswordReply>>(&bytes, ()).unwrap();
+            assert!(matches!(reply, CommandReadReply::Rejected { .. }));
+            assert_eq!(CommandPacket::payload(&reply).unwrap(), bytes);
         }
-        let empty = decode::<CameraReadReply<WifiSsidResponse>>(&[0, 0], ()).unwrap();
-        assert_eq!(encode(&empty).unwrap(), [0, 0]);
+        let empty = decode_payload::<CommandReadReply<WifiSsidReply>>(&[0, 0], ()).unwrap();
+        assert_eq!(CommandPacket::payload(&empty).unwrap(), [0, 0]);
     }
 
     #[test]
     fn mac_response_has_exact_length_and_preserves_rejection_extension() {
-        use cmd_07_0c_mac_get::WifiMacResponse;
-
         let bytes = [0, 1, 2, 3, 4, 5, 6];
-        let reply = decode::<CameraReadReply<WifiMacResponse>>(&bytes, ()).unwrap();
-        assert_eq!(encode(&reply).unwrap(), bytes);
+        let reply = decode_payload::<CommandReadReply<WifiMacReply>>(&bytes, ()).unwrap();
+        assert_eq!(CommandPacket::payload(&reply).unwrap(), bytes);
         for length in 0..bytes.len() {
-            assert!(decode::<CameraReadReply::<WifiMacResponse>>(&bytes[..length], ()).is_err());
+            assert!(
+                decode_payload::<CommandReadReply<WifiMacReply>>(&bytes[..length], ()).is_err()
+            );
         }
-        assert!(decode::<CameraReadReply::<WifiMacResponse>>(&[0; 8], ()).is_err());
+        assert!(decode_payload::<CommandReadReply<WifiMacReply>>(&[0; 8], ()).is_err());
         let bytes = [0xe0, 0xab];
-        let reply = decode::<CameraReadReply<WifiMacResponse>>(&bytes, ()).unwrap();
-        assert_eq!(encode(&reply).unwrap(), bytes);
+        let reply = decode_payload::<CommandReadReply<WifiMacReply>>(&bytes, ()).unwrap();
+        assert_eq!(CommandPacket::payload(&reply).unwrap(), bytes);
     }
 
     #[test]
     fn pairing_responses_and_notifications_preserve_unknown_values_and_tails() {
-        use cmd_07_45_pair::PairingResponse;
-        use cmd_07_46_pair_approval::PairingApprovalNotification;
-
         for value in u8::MIN..=u8::MAX {
             let bytes = [0, value, 0xab];
             let reply = decode::<CameraReadReply<PairingResponse>>(&bytes, ()).unwrap();
             assert_eq!(encode(&reply).unwrap(), bytes);
             let bytes = [value, 0xab];
-            let notification = decode::<PairingApprovalNotification>(&bytes, ()).unwrap();
-            assert_eq!(encode(&notification).unwrap(), bytes);
+            let notification = Message::request(
+                Endpoint::App,
+                1,
+                Command::Wifi(WifiCommand::PairApproval),
+                &bytes,
+            )
+            .decode_command::<PairingApprovalNotification>()
+            .unwrap();
+            assert_eq!(CommandPacket::payload(&notification).unwrap(), bytes);
         }
-        assert!(decode::<CameraReadReply::<PairingResponse>>(&[0], ()).is_err());
-        assert!(decode::<PairingApprovalNotification>(&[], ()).is_err());
+        assert!(decode::<CameraReadReply<PairingResponse>>(&[0], ()).is_err());
+        assert!(decode::<PairingApprovalNotification>(&[7, 0x46,], ()).is_err());
         let bytes = [0xe0, 0xab];
         let reply = decode::<CameraReadReply<PairingResponse>>(&bytes, ()).unwrap();
         assert_eq!(encode(&reply).unwrap(), bytes);

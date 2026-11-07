@@ -1,14 +1,9 @@
 //! Wi-Fi network join payload.
 
-use crate::Error;
-
-use super::cmd_07_07_ssid::MAX_SSID_BYTES;
-use super::packed_string::write_packed_string;
-
-/// Status and first opaque detail byte qualifying the bounded join retry.
-pub const JOIN_RETRY_STATUS: crate::protocol::ResponseStatus =
-    crate::protocol::ResponseStatus::Unknown(1);
-pub const JOIN_RETRY_DETAIL: u8 = 0xff;
+use super::{cmd_07_07_ssid::MAX_SSID_BYTES, packed_string::write_packed_string};
+use crate::{Error, protocol::ResponseStatus};
+use binrw::BinWrite;
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 
 /// Encodes the SSID and password as consecutive length-prefixed UTF-8 strings.
 ///
@@ -33,13 +28,14 @@ pub const JOIN_RETRY_DETAIL: u8 = 0xff;
 /// refusal. Status-zero replies with nonzero trailing bytes are not accepted
 /// by the lifecycle. Other detail bytes remain uninterpreted. Acceptance is
 /// not proof of association, IP configuration or video readiness.
-#[derive(binrw::BinWrite)]
+#[derive(BinWrite)]
 #[bw(assert(!ssid.is_empty() && ssid.len() <= MAX_SSID_BYTES, Error::InvalidConfig {
     field: "Wi-Fi SSID", reason: "must contain 1..=32 UTF-8 bytes",
 }))]
 #[bw(assert(password.is_empty() || (8..=63).contains(&password.len()), Error::InvalidConfig {
     field: "Wi-Fi password", reason: "must be empty or contain 8..=63 UTF-8 bytes",
 }))]
+#[bw(magic = b"\x07\x47")]
 pub struct JoinNetworkRequest<'a> {
     #[bw(write_with = write_packed_string)]
     pub ssid: &'a str,
@@ -47,8 +43,12 @@ pub struct JoinNetworkRequest<'a> {
     pub password: &'a str,
 }
 
-impl std::fmt::Debug for JoinNetworkRequest<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+/// Status and first opaque detail byte qualifying the bounded join retry.
+pub const JOIN_RETRY_STATUS: ResponseStatus = ResponseStatus::Unknown(1);
+pub const JOIN_RETRY_DETAIL: u8 = 0xff;
+
+impl Debug for JoinNetworkRequest<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.write_str("JoinNetworkRequest { credentials: [REDACTED] }")
     }
 }
@@ -56,13 +56,14 @@ impl std::fmt::Debug for JoinNetworkRequest<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::encode;
+    use crate::protocol::CommandPacket;
+    use std::io::Cursor;
 
     #[test]
     fn join_lengths_are_checked_before_writing_either_string() {
         for ssid in ["x".to_owned(), "x".repeat(32), "\u{00e9}".repeat(16)] {
             for password in ["".to_owned(), "p".repeat(8), "p".repeat(63)] {
-                let bytes = encode(&JoinNetworkRequest {
+                let bytes = CommandPacket::payload(&JoinNetworkRequest {
                     ssid: &ssid,
                     password: &password,
                 })
@@ -79,9 +80,9 @@ mod tests {
             ("x".to_owned(), "p".repeat(7)),
             ("x".to_owned(), "p".repeat(64)),
         ] {
-            let mut writer = std::io::Cursor::new(Vec::new());
+            let mut writer = Cursor::new(Vec::new());
             assert!(
-                encode(&JoinNetworkRequest {
+                CommandPacket::payload(&JoinNetworkRequest {
                     ssid: &ssid,
                     password: &password
                 })

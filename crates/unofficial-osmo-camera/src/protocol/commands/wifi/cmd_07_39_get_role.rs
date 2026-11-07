@@ -3,9 +3,9 @@
 use crate::protocol::{
     Query,
     commands::reply::{CameraRawData, CameraReadReply},
-    identity::{Command, Endpoint, WifiCommand},
+    identity::Endpoint,
 };
-use binrw::{BinRead, BinWrite};
+use binrw::{BinRead, BinWrite, binwrite};
 
 /// Request the Wi-Fi role; the accepted response layout is unspecified.
 ///
@@ -19,20 +19,27 @@ use binrw::{BinRead, BinWrite};
 ///
 /// The accepted-body layout and model support remain unspecified. In
 /// particular, do not interpret an arbitrary returned byte as `WifiRole`.
-#[derive(Clone, Copy, Debug, BinWrite)]
-#[bw(magic = 0u8)]
-pub struct WifiRoleGet;
+#[binwrite]
+#[derive(Clone, Copy, Debug, Default)]
+#[bw(magic = b"\x07\x39")]
+pub struct WifiRoleGet {
+    #[bw(calc = <Self as Query>::REQUEST_PAYLOAD)]
+    payload: &'static [u8],
+}
+
+/// Complete command reply, including command identity and status-bearing data.
+#[derive(Clone, Debug, PartialEq, Eq, BinRead, BinWrite)]
+#[brw(magic = b"\x07\x39")]
+pub struct WifiRoleReply {
+    pub result: CameraReadReply<CameraRawData>,
+}
 
 impl Query for WifiRoleGet {
-    type Response = CameraReadReply<CameraRawData>;
-
-    fn response_args(&self) {}
+    type Response = WifiRoleReply;
+    const REQUEST_PAYLOAD: &'static [u8] = &[0x00];
 
     fn receiver(&self) -> Endpoint {
         Endpoint::Wifi
-    }
-    fn command(&self) -> Command {
-        Command::Wifi(WifiCommand::GetRole)
     }
 }
 

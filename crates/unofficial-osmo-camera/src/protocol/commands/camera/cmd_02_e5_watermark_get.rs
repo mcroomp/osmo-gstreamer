@@ -1,31 +1,61 @@
 //! Watermark GET payload.
-use binrw::{BinRead, BinWrite};
 
 use crate::{
-    Error, Result,
+    Error,
     protocol::{
-        commands::reply::{CameraRawData, camera_read_query},
-        identity::{CameraCommand, Command},
+        Query,
+        commands::reply::{CameraRawData, CommandReadReply},
+        identity::Endpoint,
+        u16_at,
     },
 };
+use binrw::{binrw, binwrite};
+
+/// Read model-specific watermark settings, not feature availability.
+///
+/// APP -> Camera | 0x02/0xE5
+///
+/// ```text
+/// request { format_and_operation: u8 = 0x20, trailing: [0; 6] }
+/// reply { status: u8 | reject if nonzero
+///         flags: le_u16, length: le_u16, opaque: u8
+///         value: [u8; length], trailing: [u8; remaining] }
+/// ```
+///
+/// The low request nibble selects GET; high nibble 2 selects this reply
+/// format. A zero-length value still requires five data bytes after status.
+/// This does not confirm overlay placement, text encoding or mode support.
+#[binwrite]
+#[derive(Clone, Copy, Debug, Default)]
+#[bw(magic = b"\x02\xe5")]
+pub struct CameraWatermarkGet {
+    #[bw(calc = <Self as Query>::REQUEST_PAYLOAD)]
+    payload: &'static [u8],
+}
 
 const WATERMARK_HEADER_LENGTH: usize = 5;
 const WATERMARK_PHOTOS_MASK: u8 = 0x01;
 const WATERMARK_VIDEOS_MASK: u8 = 0x02;
 const WATERMARK_LIVE_VIEW_MASK: u8 = 0x04;
 
-/// Accepted Nano format-2 watermark metadata, excluding outer status.
+/// Accepted Nano format-2 watermark metadata after a successful status.
 ///
 /// Sequential data: `flags: le_u16, length: le_u16, opaque: u8,
 /// value: [u8; length]`, then any retained trailing bytes.
 /// Neither the value's encoding nor individual flag meanings are established.
-#[derive(Clone, Debug, PartialEq, Eq, BinRead, BinWrite)]
-#[br(try_map = Self::from_raw)]
-pub struct CameraWatermarkData {
+#[binrw]
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[brw(magic = b"\x02\xe5")]
+pub struct CameraWatermarkReply {
+    #[br(temp, assert(status == 0, "accepted reply requires success status"))]
+    #[bw(calc = 0u8)]
+    status: u8,
+    #[br(assert(raw.0.len() >= WATERMARK_HEADER_LENGTH, Error::Protocol("truncated watermark metadata header")))]
+    #[br(assert(raw.0.len() >= WATERMARK_HEADER_LENGTH + usize::from(u16_at(&raw.0, 2)), Error::Protocol("truncated watermark metadata value")))]
     raw: CameraRawData,
 }
 
-impl CameraWatermarkData {
+impl CameraWatermarkReply {
     pub fn raw_bytes(&self) -> &[u8] {
         &self.raw.0
     }
@@ -36,11 +66,11 @@ impl CameraWatermarkData {
     }
 
     pub fn raw_flags_word(&self) -> u16 {
-        crate::protocol::u16_at(&self.raw.0, 0)
+        u16_at(&self.raw.0, 0)
     }
 
     pub fn value_length(&self) -> u16 {
-        crate::protocol::u16_at(&self.raw.0, 2)
+        u16_at(&self.raw.0, 2)
     }
 
     pub fn opaque_byte(&self) -> u8 {
@@ -81,53 +111,31 @@ impl CameraWatermarkData {
     }
 }
 
-impl CameraWatermarkData {
-    fn from_raw(raw: CameraRawData) -> Result<Self> {
-        if raw.0.len() < WATERMARK_HEADER_LENGTH {
-            return Err(Error::Protocol("truncated watermark metadata header"));
-        }
-        let data = Self { raw };
-        if data.value_end() > data.raw.0.len() {
-            return Err(Error::Protocol("truncated watermark metadata value"));
-        }
-        Ok(data)
+impl Query for CameraWatermarkGet {
+    type Response = CommandReadReply<CameraWatermarkReply>;
+    const REQUEST_PAYLOAD: &'static [u8] = &[0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+
+    fn receiver(&self) -> Endpoint {
+        Endpoint::Camera
     }
 }
-
-camera_read_query!(
-    /// Read model-specific watermark settings, not feature availability.
-    ///
-    /// APP -> Camera | 0x02/0xE5
-    ///
-    /// ```text
-    /// request { format_and_operation: u8 = 0x20, trailing: [0; 6] }
-    /// reply { status: u8 | reject if nonzero
-    ///         flags: le_u16, length: le_u16, opaque: u8
-    ///         value: [u8; length], trailing: [u8; remaining] }
-    /// ```
-    ///
-    /// The low request nibble selects GET; high nibble 2 selects this reply
-    /// format. A zero-length value still requires five data bytes after status.
-    /// This does not confirm overlay placement, text encoding or mode support.
-    CameraWatermarkGet,
-    Command::Camera(CameraCommand::Watermark),
-    &[0x20, 0, 0, 0, 0, 0, 0],
-    CameraWatermarkData
-);
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::commands::reply::CameraReadReply;
-    use crate::protocol::{decode, encode};
+    use crate::protocol::{
+        CommandPacket,
+        commands::reply::{CommandReadReply, decode_payload},
+    };
 
     #[test]
     fn synthetic_watermark_flags_and_tail_round_trip() {
-        let _query = CameraWatermarkGet;
+        let _query = CameraWatermarkGet::default();
         for flags in [0, 1, 2, 4, 0x80, 0xff] {
             let bytes = [0, flags, 0xa5, 2, 0, 0x5a, 0x12, 0x34, 0xcc];
-            let reply = decode::<CameraReadReply<CameraWatermarkData>>(&bytes, ()).unwrap();
-            let CameraReadReply::Accepted(value) = &reply else {
+            let reply =
+                decode_payload::<CommandReadReply<CameraWatermarkReply>>(&bytes, ()).unwrap();
+            let CommandReadReply::Accepted(value) = &reply else {
                 panic!("expected accepted watermark");
             };
             assert_eq!(value.raw_flags(), flags);
@@ -140,7 +148,7 @@ mod tests {
             assert_eq!(value.value(), [0x12, 0x34]);
             assert_eq!(value.trailing_bytes(), [0xcc]);
             assert_eq!(value.extension(), &bytes[2..]);
-            assert_eq!(encode(&reply).unwrap(), bytes);
+            assert_eq!(CommandPacket::payload(&reply).unwrap(), bytes);
         }
         for bytes in [
             &[][..],
@@ -150,7 +158,7 @@ mod tests {
             &[0, 1, 0, 1, 0, 0][..],
             &[0, 1, 0, 0xff, 0xff, 0][..],
         ] {
-            assert!(decode::<CameraReadReply::<CameraWatermarkData>>(bytes, ()).is_err());
+            assert!(decode_payload::<CommandReadReply<CameraWatermarkReply>>(bytes, ()).is_err());
         }
         for bytes in [
             &[0, 0x80, 0, 0, 0, 0][..],
@@ -158,8 +166,10 @@ mod tests {
             &[0xdf, 0xa5, 0x5a][..],
         ] {
             assert_eq!(
-                encode(&decode::<CameraReadReply::<CameraWatermarkData>>(bytes, ()).unwrap())
-                    .unwrap(),
+                CommandPacket::payload(
+                    &decode_payload::<CommandReadReply<CameraWatermarkReply>>(bytes, ()).unwrap()
+                )
+                .unwrap(),
                 bytes
             );
         }

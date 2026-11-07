@@ -1,13 +1,30 @@
 //! User ISO parameter GET.
 
-use crate::protocol::{
-    commands::reply::{camera_data, camera_read_query},
-    identity::{CameraCommand, Command},
+use crate::{
+    Error,
+    protocol::{
+        Query,
+        commands::reply::{CameraRawData, CommandReadReply},
+        identity::Endpoint,
+    },
 };
+use binrw::{BinWrite, binrw};
+
+/// Read the configured ISO parameter code.
+///
+/// APP -> Camera | 0x02/0x2B
+///
+/// ```text
+/// request {}
+/// reply { status: u8, code: u8, extension: [u8; remaining] }
+/// ```
+#[derive(Clone, Copy, Debug, Default, BinWrite)]
+#[bw(magic = b"\x02\x2b")]
+pub struct CameraUserIsoGet;
 
 /// Legacy Nano user-ISO labels; numeric ISO meanings are not confirmed here.
 ///
-/// The wire code remains available from [`CameraIsoCode::code`]. These labels
+/// The wire code remains available from [`CameraUserIsoReply::code`]. These labels
 /// do not describe ISO-limit parameter `0x000F` or establish mode support.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NanoUserIso {
@@ -43,24 +60,34 @@ impl NanoUserIso {
     }
 }
 
-camera_data!(
-    /// One-byte ISO code followed by any uninterpreted extension.
-    ///
-    /// Camera -> APP | 0x02/0x2B | ISO reply
-    ///
-    /// ```text
-    /// reply { status: u8 | handled by CameraReadReply
-    ///         code: u8 | unchanged raw code, not a physical ISO value
-    ///         extension: [u8; remaining] | opaque }
-    /// ```
-    ///
-    /// The legacy Nano labels are a candidate interpretation only. Unknown
-    /// codes remain available through `code`, and aliases remain distinct there.
-    CameraIsoCode,
-    1
-);
+/// One-byte ISO code followed by any uninterpreted extension.
+///
+/// Camera -> APP | 0x02/0x2B | ISO reply
+///
+/// ```text
+/// reply { status: u8 | handled by CommandReadReply
+///         code: u8 | unchanged raw code, not a physical ISO value
+///         extension: [u8; remaining] | opaque }
+/// ```
+///
+/// The legacy Nano labels are a candidate interpretation only. Unknown
+/// codes remain available through `code`, and aliases remain distinct there.
+#[binrw]
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[brw(magic = b"\x02\x2b")]
+pub struct CameraUserIsoReply {
+    #[br(temp, assert(status == 0, "accepted reply requires success status"))]
+    #[bw(calc = 0u8)]
+    status: u8,
+    #[br(assert(!raw.0.is_empty(), Error::Protocol("truncated CameraUserIsoReply")))]
+    raw: CameraRawData,
+}
 
-impl CameraIsoCode {
+impl CameraUserIsoReply {
+    pub fn raw_bytes(&self) -> &[u8] {
+        &self.raw.0
+    }
+
     pub fn code(&self) -> u8 {
         self.raw_bytes()[0]
     }
@@ -87,26 +114,21 @@ impl CameraIsoCode {
     }
 }
 
-camera_read_query!(
-    /// Read the configured ISO parameter code.
-    ///
-    /// APP -> Camera | 0x02/0x2B
-    ///
-    /// ```text
-    /// request {}
-    /// reply { status: u8, code: u8, extension: [u8; remaining] }
-    /// ```
-    CameraUserIsoGet,
-    Command::Camera(CameraCommand::UserIso),
-    &[],
-    CameraIsoCode
-);
+impl Query for CameraUserIsoGet {
+    type Response = CommandReadReply<CameraUserIsoReply>;
+
+    fn receiver(&self) -> Endpoint {
+        Endpoint::Camera
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::commands::reply::CameraReadReply;
-    use crate::protocol::{decode, encode};
+    use crate::protocol::{
+        CommandPacket,
+        commands::reply::{CommandReadReply, decode_payload},
+    };
 
     #[test]
     fn iso_codes_keep_raw_aliases_and_offer_nano_labels() {
@@ -120,14 +142,16 @@ mod tests {
             (0x0D, Some(NanoUserIso::Iso51200)),
             (0xFE, None),
         ] {
-            let reply = decode::<CameraReadReply<CameraIsoCode>>(&[0, code, 0xAA], ()).unwrap();
-            let CameraReadReply::Accepted(value) = reply else {
+            let reply =
+                decode_payload::<CommandReadReply<CameraUserIsoReply>>(&[0, code, 0xAA], ())
+                    .unwrap();
+            let CommandReadReply::Accepted(value) = reply else {
                 panic!("expected accepted ISO code");
             };
             assert_eq!(value.code(), code);
             assert_eq!(value.nano_value(), expected);
             assert_eq!(value.raw_bytes(), [code, 0xAA]);
-            assert_eq!(encode(&value).unwrap(), [code, 0xAA]);
+            assert_eq!(CommandPacket::payload(&value).unwrap()[1..], [code, 0xAA]);
         }
         assert_eq!(NanoUserIso::Auto.iso_value(), None);
         assert_eq!(NanoUserIso::Iso6400.iso_value(), Some(6_400));
