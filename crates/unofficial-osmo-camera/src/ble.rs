@@ -1199,7 +1199,7 @@ impl<I: BleIo> Worker<I> {
                 && attempt + 1 < MAX_JOIN_ATTEMPTS
             {
                 log::warn!(
-                    "Camera temporarily refused router join; retrying the same network after delay"
+                    "Camera returned router join failure 01 FF; existing bounded policy retries after delay, but the failure is not known to be transient"
                 );
                 self.pause(JOIN_RETRY_DELAY).await?;
                 continue;

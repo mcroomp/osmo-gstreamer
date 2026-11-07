@@ -65,7 +65,7 @@ mod tests {
     use super::{
         super::{
             cmd_02_1a_live_view_quality_set::{LiveViewQuality, LiveViewQualitySet},
-            cmd_02_09_live_view_source::{LiveViewGate, LiveViewToggleRequest},
+            cmd_02_09_live_view_control::LiveViewControlRequest,
         },
         *,
     };
@@ -79,18 +79,12 @@ mod tests {
     fn live_view_encoders_never_become_approved_reads() {
         let fixtures = [
             (
-                CameraCommand::LiveViewSource,
-                CommandPacket::payload(&LiveViewToggleRequest {
-                    gate: LiveViewGate::Enable,
-                })
-                .unwrap(),
+                CameraCommand::LiveViewControl,
+                CommandPacket::payload(&LiveViewControlRequest::start()).unwrap(),
             ),
             (
-                CameraCommand::LiveViewSource,
-                CommandPacket::payload(&LiveViewToggleRequest {
-                    gate: LiveViewGate::Disable,
-                })
-                .unwrap(),
+                CameraCommand::LiveViewControl,
+                CommandPacket::payload(&LiveViewControlRequest::stop()).unwrap(),
             ),
             (
                 CameraCommand::LiveViewQualitySet,

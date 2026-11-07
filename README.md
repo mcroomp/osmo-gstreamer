@@ -66,7 +66,7 @@ questions; no new automatic requests or writes are introduced.
 
 Each parameter has one payload struct shared by GET and SET, such as
 `EisValue` or `RotationStateValue`. `Get<T>` fixes the requested ID and response
-type; `Set<T>` privately holds a checked payload of the same type. There is no
+type; `Set<T>` privately holds the supplied payload of the same type. There is no
 large parameter-value enum, optional selector/value union, or separate SET
 payload type. Callers are responsible for selecting supported operations and may
 implement the parameter traits for custom payloads; this does not grant hardware
@@ -233,15 +233,15 @@ macros. The previous `CapabilityQuery` selector enum is removed.
 Both LAN and BLE typed query entry points now take only the query type.
 
 All 37 targeted parameter entries document their value shape or an explicit unknown.
-There are **33 available checked SET codecs**, with restricted subsets of some
+There are **33 available checked SET constructors**, with restricted subsets of some
 write branches. Fixed record widths are expressed by the binrw payload types.
 TC records have two possible widths, selected by their second byte.
 Covered writes include
 raw audio/mirror codes, bounded image/shutter/recording controls, tagged
 autofocus records, sparse `001F`/`003C` codes and capture-aspect values.
 Capture-aspect SET accepts only 0..=255 despite its four-byte wire width.
-`BeautyEffectValue` carries the complete 62-byte indexed record; checked SET
-requires the canonical count, indices and one-byte entries.
+`BeautyEffectValue` carries the complete 62-byte indexed record; its SET constructor
+builds the canonical count, indices and one-byte entries.
 Individual effect labels/scales remain unknown, and partial beauty patches
 are not exposed.
 
@@ -261,18 +261,21 @@ trigger: all bytes zero except byte 3 equal to 1. This camera path does not
 forward a destination, resolution or bitrate; the codec does not configure,
 start or stop RTMP. Other profile variants remain unchecked.
 
-Calibration `002B` permits only action 3's raw focal-length record: zero
+The calibration `002B` constructor supplies only action 3's raw focal-length record: zero
 metadata, a byte-length-prefixed NUL-terminated label, LE16 extra length 4,
 raw LE16 focal code and two zero bytes. Units and supported codes are unknown.
-Actions 0..=2 remain blocked because their native selectors can terminate the
-provider process. `002D` permits actions 0/2 with one name, or 1 with two names,
+Actions 0..=2 remain outside the constructor subset because their native selectors
+can terminate the provider process. The `002D` constructor permits actions 0/2
+with one name, or 1 with two names,
 behind an exact LE16 data length. Names are nonempty printable ASCII, at most
 127 characters each; total values cannot exceed 255 bytes. These are byte-level
 checks, not a calibration/file-operation procedure, path policy or provider
 availability guarantee. No apply/rename/delete meanings are assigned.
 
-The four GET-only IDs cannot become SETs. Unknown codes in supported GET layouts
-remain raw without granting a checked write; unsupported layouts are explicit errors.
+The four GET-only IDs have no checked SET constructor. They remain manually
+encodable through `Set<T>`, which does not enforce operation support.
+Unknown codes in supported GET layouts remain raw without granting a checked
+write; unsupported layouts are explicit errors.
 Duration GET retains all four bytes, but only its low word has
 an established conversion. Known widths/codes never imply current-mode
 availability, physical semantics, safe retries or an applied setting.
@@ -288,6 +291,45 @@ restricted to 0..=5 and voice-language SET codes to 0/1; invalid values now
 return an error at construction. GET decoding continues to preserve
 unknown codes without applying SET limits. These APIs only encode payloads;
 they neither send requests nor authorize changing a camera setting.
+
+### Preview command API migration
+
+The current codecs distinguish camera parameters at recipient `01`, media
+streaming at `08`, and live-view control at `41`. Their byte layouts are not
+interchangeable. Constructor bounds describe restricted compatibility subsets,
+not guaranteed runtime availability. Manual payloads remain permissive by design.
+
+- `02:09` emits ten zero bytes and action `03`/`04`.
+- `09:A8` retains the fixed I-frame request, now named `LiveViewIFrameRequest`
+  rather than transmission startup.
+- `02:1A` remains an encoding-only quality payload, separate from `02:8E/0006`.
+- `07:47` retries matching `01 FF` replies under an existing bounded host
+  policy, not proof of transient failure.
+- `03:DA` is an unconfirmed compatibility prelude, not verified physical
+  gimbal initialization.
+
+These API contracts do not establish a firmware support matrix, safe retry semantics,
+or working media delivery. It adds no automatic requests, settings writes,
+reconnects or hardware tests.
+
+Preview command API migration (breaking; no legacy aliases):
+
+| Previous API | Replacement |
+|--------------|-------------|
+| `camera::cmd_02_09_live_view_source` | `camera::cmd_02_09_live_view_control` |
+| `LiveViewSourceRequest::default()` | `LiveViewControlRequest::start()` |
+| `LiveViewToggleRequest { gate: LiveViewGate::Enable/Disable }` | `LiveViewControlRequest::start()` / `stop()`, or `new(LiveViewControlAction::Start/Stop)` |
+| `CameraCommand::LiveViewSource` | `CameraCommand::LiveViewControl` |
+| `live_view::cmd_09_a8_start_transmission` | `live_view::cmd_09_a8_live_view_control` |
+| `StartTransmissionRequest::default()` | `LiveViewIFrameRequest::default()` |
+| `LiveViewCommand::StartTransmission` | `LiveViewCommand::Control` |
+
+`LiveViewControlRequest` exposes an `action`, not a source index or gate.
+Its start/stop helpers encode the same eleven-byte requests as before. The
+I-frame request remains the same ten bytes, and the automatic preview sequence
+still sends start followed by an I-frame request. No stop request, quality
+write, retry or reconnect was added to the lifecycle. `02:1A` stays a manually
+encodable, unverified command; no replacement encoder settings are inferred.
 
 ### Explicit RTMP controls (experimental)
 

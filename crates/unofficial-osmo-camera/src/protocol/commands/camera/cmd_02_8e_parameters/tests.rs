@@ -296,6 +296,136 @@ fn catalogue_read_eligibility_matches_raw_read_approval_without_granting_writes(
     ));
 }
 
+#[test]
+fn scalar_constructor_bounds_cover_every_byte_without_restricting_manual_values() {
+    fn check<T: Parameter>(new: fn(u8) -> Result<T>, permitted: &[u8]) {
+        for code in u8::MIN..=u8::MAX {
+            let constructed = new(code);
+            assert_eq!(
+                constructed.is_ok(),
+                permitted.contains(&code),
+                "parameter {:04x}, code {code}",
+                T::ID,
+            );
+            if let Ok(value) = constructed {
+                assert_eq!(encode(&Set::new(value)).unwrap().last(), Some(&code));
+            }
+        }
+    }
+
+    check(AdvanceModeValue::new, &[0, 1, 2]);
+    check(StreamQualityValue::new, &[0, 1, 2]);
+    check(EisValue::new, &[0, 1, 2, 3, 4, 5, 6, 7]);
+    check(FieldOfViewValue::new, &[0, 1, 2, 3, 4, 5]);
+    check(VoiceControlValue::new, &[0, 1]);
+    check(VoiceLanguageValue::new, &[0, 1]);
+    check(Unknown001fValue::new, &[1, 2, 4, 8, 16]);
+    check(SelfieFollowingValue::new, &[0, 1]);
+    check(Unknown0028Value::new, &[0, 1]);
+    check(StabilizationPreferenceValue::new, &[0, 1]);
+    check(ImageAdjustmentValue::new, &[0, 1, 2, 3]);
+    check(ShutterLimitValue::new, &[0, 1, 2, 3, 4, 5]);
+    check(VideoQualityEnhancementValue::new, &[0, 1]);
+    check(RecordingPlanValue::new, &[0, 1, 2]);
+    check(LiveViewEisValue::new, &[0, 1, 2, 3, 4, 5, 6, 7]);
+
+    let all_codes: Vec<_> = (u8::MIN..=u8::MAX).collect();
+    check(IsoLimitValue::new, &all_codes);
+    check(RecordingAudioChannelValue::new, &all_codes);
+    check(SelfieMirrorValue::new, &all_codes);
+    check(TimelapseTrackSetValue::new, &all_codes);
+    for code in u8::MIN..=u8::MAX {
+        assert_eq!(
+            encode(&Set::new(EisValue { code })).unwrap(),
+            [2, 0x8e, 1, 1, 8, 0, 1, code],
+        );
+    }
+}
+
+#[test]
+fn every_profile_write_has_a_constructor_with_the_exact_single_tlv_shape() {
+    fn checked_id<T: Parameter>(value: Result<T>, body: &[u8]) -> u16 {
+        let mut expected = vec![2, 0x8e, 1, 1];
+        expected.extend_from_slice(&T::ID.to_le_bytes());
+        expected.push(u8::try_from(body.len()).unwrap());
+        expected.extend_from_slice(body);
+        assert_eq!(encode(&Set::new(value.unwrap())).unwrap(), expected);
+        T::ID
+    }
+
+    let name = CalibrationName::new("x").unwrap();
+    let mut beauty = vec![15, 0];
+    for index in 0..15u16 {
+        beauty.extend_from_slice(&index.to_le_bytes());
+        beauty.extend_from_slice(&[1, 0xa5]);
+    }
+    let ids = [
+        checked_id(AdvanceModeValue::new(2), &[2]),
+        checked_id(StreamQualityValue::new(2), &[2]),
+        checked_id(EisValue::new(7), &[7]),
+        checked_id(FieldOfViewValue::new(5), &[5]),
+        checked_id(VoiceControlValue::new(1), &[1]),
+        checked_id(VoiceLanguageValue::new(1), &[1]),
+        checked_id(IsoLimitValue::new(0xa5), &[0xa5]),
+        checked_id(LoopDurationValue::new(1200), &[0xb0, 4, 0, 0]),
+        checked_id(Unknown0019Value::new(), &[0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]),
+        checked_id(Unknown001fValue::new(16), &[16]),
+        checked_id(RecordingAudioChannelValue::new(0xa5), &[0xa5]),
+        checked_id(SelfieFollowingValue::new(1), &[1]),
+        checked_id(
+            Unknown0026Value::new(4, TcData::Word(0x12345678)),
+            &[1, 4, 0x78, 0x56, 0x34, 0x12],
+        ),
+        checked_id(Unknown0028Value::new(1), &[1]),
+        checked_id(
+            ShortVideoParametersValue::new(0x12345678),
+            &[1, 0x78, 0x56, 0x34, 0x12, 0, 0, 0, 0],
+        ),
+        checked_id(
+            LensUserCalibrationValue::new(name.clone(), 0x1234),
+            &[3, 0, 2, b'x', 0, 4, 0, 0x34, 0x12, 0, 0],
+        ),
+        checked_id(
+            LensUserCalibrationFileValue::new(1, name.clone(), Some(name)),
+            &[1, 6, 0, 2, b'x', 0, 2, b'x', 0],
+        ),
+        checked_id(AddCustomModeValue::new(0xa5, 3), &[0xa5, 3]),
+        checked_id(StabilizationPreferenceValue::new(1), &[1]),
+        checked_id(StorageSynchronizationValue::new(1, 2, 1), &[1, 2, 1]),
+        checked_id(ImageAdjustmentValue::new(3), &[3]),
+        checked_id(ShutterLimitValue::new(5), &[5]),
+        checked_id(VideoQualityEnhancementValue::new(1), &[1]),
+        checked_id(TimelapseTrackPreviewValue::new(0xa5, 1), &[0xa5, 1]),
+        checked_id(TimelapseTrackSetValue::new(0xa5), &[0xa5]),
+        checked_id(SelfieMirrorValue::new(0xa5), &[0xa5]),
+        checked_id(BeautyEffectValue::new([0xa5; 15]), &beauty),
+        checked_id(AutofocusSensitivityValue::new(0xa5), &[1, 0xa5]),
+        checked_id(AutofocusStrategyValue::new(0xa5), &[1, 0xa5]),
+        checked_id(Unknown003cValue::new(300), &[0x2c, 1]),
+        checked_id(RecordingPlanValue::new(2), &[2]),
+        checked_id(LiveViewEisValue::new(7), &[7]),
+        checked_id(CaptureAspectTypeValue::new(255), &[255, 0, 0, 0]),
+    ];
+    let checked: HashSet<_> = ids.into_iter().collect();
+    let writes: HashSet<_> = NANO_10_00_31_22
+        .commands
+        .iter()
+        .filter_map(|entry| match entry.selector {
+            CapabilitySelector::Parameter(id) if entry.access.can_write() => Some(id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(checked.len(), 33);
+    assert_eq!(checked, writes);
+    for selector in 1..=3 {
+        checked_id(
+            Unknown0026Value::new(selector, TcData::Byte(0xa5)),
+            &[1, selector, 0xa5],
+        );
+    }
+    checked_id(StorageSynchronizationValue::new(0, 0, 2), &[0, 0, 2]);
+}
+
 fn decode_reply<Q: Query>(query: &Q, bytes: &[u8]) -> Result<Q::Response> {
     let mut message = Message::request(Endpoint::App, 1, query.command(), bytes);
     message.flags = Flags::RESPONSE;

@@ -9,7 +9,7 @@ use crate::{
             camera::{
                 cmd_02_0c_playback::{PlaybackMode, PlaybackRequest},
                 cmd_02_8e_parameters::{Parameter, Set},
-                cmd_02_09_live_view_source::LiveViewSourceRequest,
+                cmd_02_09_live_view_control::LiveViewControlRequest,
                 cmd_02_80_camera_state::CameraStateNotification,
             },
             common::{
@@ -17,7 +17,7 @@ use crate::{
                 cmd_00_88_app_presence::AppPresenceRequest,
             },
             gimbal::cmd_03_da_initialize::GimbalInitializeRequest,
-            live_view::cmd_09_a8_start_transmission::StartTransmissionRequest,
+            live_view::cmd_09_a8_live_view_control::LiveViewIFrameRequest,
             wifi::cmd_07_45_pair::{PAIRING_ID, PairingRequest},
         },
         identity::{
@@ -1328,10 +1328,10 @@ impl Link {
                 mode: PlaybackMode::Leave,
             },
         )?;
-        self.request_command(Endpoint::Camera, &LiveViewSourceRequest::default())?;
+        self.request_command(Endpoint::Camera, &LiveViewControlRequest::start())?;
         self.preview = Some(PreviewReceiver::new(self.session));
         self.last_frame = Instant::now();
-        self.request_command(Endpoint::LiveView, &StartTransmissionRequest::default())?;
+        self.request_command(Endpoint::LiveView, &LiveViewIFrameRequest::default())?;
         self.deadline = None;
         Ok(())
     }
@@ -1503,8 +1503,8 @@ impl Link {
         if ![
             Command::Gimbal(GimbalCommand::Initialize),
             Command::Camera(CameraCommand::Playback),
-            Command::Camera(CameraCommand::LiveViewSource),
-            Command::LiveView(LiveViewCommand::StartTransmission),
+            Command::Camera(CameraCommand::LiveViewControl),
+            Command::LiveView(LiveViewCommand::Control),
         ]
         .contains(&message.command)
         {

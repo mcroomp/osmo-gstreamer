@@ -23,9 +23,10 @@ use std::fmt::{Debug, Formatter, Result as FmtResult};
 /// password or 8..=63 encoded password bytes. Limits count bytes, not characters.
 /// Length prefixes do not include a terminating NUL.
 ///
-/// Replies reuse `CameraReadReply<RemainingBytes>`. A nonempty all-zero body
-/// indicates acceptance; status 0x01 followed by 0xFF qualifies a temporary
-/// refusal. Status-zero replies with nonzero trailing bytes are not accepted
+/// Replies reuse `CameraReadReply<RemainingBytes>`. A nonempty all-zero payload
+/// indicates acceptance; status 0x01 followed by 0xFF qualifies the existing
+/// bounded retry policy, not a uniquely temporary refusal.
+/// Status-zero replies with nonzero trailing bytes are not accepted
 /// by the lifecycle. Other detail bytes remain uninterpreted. Acceptance is
 /// not proof of association, IP configuration or video readiness.
 #[derive(BinWrite)]
@@ -43,7 +44,8 @@ pub struct JoinNetworkRequest<'a> {
     pub password: &'a str,
 }
 
-/// Status and first opaque detail byte qualifying the bounded join retry.
+/// Status and first detail byte used by the host's bounded retry policy.
+/// These bytes do not establish that a failure is transient or retry-safe.
 pub const JOIN_RETRY_STATUS: ResponseStatus = ResponseStatus::Unknown(1);
 pub const JOIN_RETRY_DETAIL: u8 = 0xff;
 

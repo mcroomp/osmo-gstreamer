@@ -6,7 +6,7 @@
 //! Request encodings describe bytes emitted by this library, not universal
 //! acceptance rules. Reply decoders state their own validated layouts.
 
-pub mod cmd_02_09_live_view_source;
+pub mod cmd_02_09_live_view_control;
 pub mod cmd_02_0c_playback;
 pub mod cmd_02_18_video_format_set;
 pub mod cmd_02_1a_live_view_quality_set;

@@ -1,4 +1,4 @@
-//! Fixed live-view control request used during preview startup.
+//! Live-view controller I-frame request used during preview startup.
 
 use binrw::binwrite;
 
@@ -15,11 +15,12 @@ use binrw::binwrite;
 /// This ten-byte control layout selects force-I-frame action 4, not a general
 /// encoder-start operation. The raw argument's units/range are unspecified;
 /// it is not a codec, resolution or frame-count field. A successful response
-/// does not confirm video delivery. The type name is retained for compatibility.
+/// does not confirm video delivery. This request does not establish encoder
+/// startup or configure bitrate.
 #[binwrite]
 #[derive(Clone, Copy, Debug, Default)]
 #[bw(magic = b"\x09\xa8")]
-pub struct StartTransmissionRequest {
+pub struct LiveViewIFrameRequest {
     #[bw(calc = 0u8)]
     liveview_id: u8,
     #[bw(calc = 4u8)]
@@ -34,10 +35,11 @@ mod tests {
     use crate::protocol::CommandPacket;
 
     #[test]
-    fn compatibility_request_remains_the_exact_ten_byte_iframe_control() {
+    fn iframe_request_preserves_the_exact_ten_byte_control_payload() {
         assert_eq!(
-            CommandPacket::payload(&StartTransmissionRequest::default()).unwrap(),
+            CommandPacket::payload(&LiveViewIFrameRequest::default()).unwrap(),
             [0, 4, 2, 0, 0, 0, 0, 0, 0, 0]
         );
+        assert_eq!(LiveViewIFrameRequest::COMMAND_ID, [9, 0xa8]);
     }
 }

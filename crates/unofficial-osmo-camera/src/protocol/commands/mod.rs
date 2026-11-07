@@ -24,7 +24,7 @@ mod tests {
             cmd_00_88_app_presence::AppPresenceRequest,
         },
         gimbal::cmd_03_da_initialize::GimbalInitializeRequest,
-        live_view::cmd_09_a8_start_transmission::StartTransmissionRequest,
+        live_view::cmd_09_a8_live_view_control::LiveViewIFrameRequest,
         wifi::{cmd_07_39_get_role::WifiRoleGet, cmd_07_45_pair::BlePairingArmRequest},
     };
     use crate::protocol::encode;
@@ -64,7 +64,7 @@ mod tests {
             &[3, 0xda, 5, 0xff, 0xff, 0xff, 0xff],
         );
         assert_encoding(
-            StartTransmissionRequest::default(),
+            LiveViewIFrameRequest::default(),
             &[9, 0xa8, 0, 4, 2, 0, 0, 0, 0, 0, 0, 0],
         );
         assert_encoding(WifiRoleGet::default(), &[7, 0x39, 0]);

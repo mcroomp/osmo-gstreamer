@@ -65,15 +65,13 @@ mod tests {
                 cmd_02_4c_live_view_output_set::{
                     LcdOutputFormat, LcdOutputSet, LiveViewStreamFormat, LiveViewStreamOutputSet,
                 },
-                cmd_02_09_live_view_source::{
-                    LiveViewGate, LiveViewSourceRequest, LiveViewToggleRequest,
-                },
+                cmd_02_09_live_view_control::LiveViewControlRequest,
                 cmd_02_80_camera_state::CameraStateNotification,
             },
             camera_wake::cmd_53_10_wake::BleWakeRequest,
             common::cmd_00_88_app_presence::AppPresenceRequest,
             gimbal::cmd_03_da_initialize::GimbalInitializeRequest,
-            live_view::cmd_09_a8_start_transmission::StartTransmissionRequest,
+            live_view::cmd_09_a8_live_view_control::LiveViewIFrameRequest,
             media::{
                 cmd_02_8e_streaming_control::{
                     MediaStreamingControl, MediaStreamingControlRequest,
@@ -144,19 +142,17 @@ mod tests {
             &[5, 255, 255, 255, 255],
         );
         check(
-            StartTransmissionRequest::default(),
+            LiveViewIFrameRequest::default(),
             [9, 0xa8],
             &[0, 4, 2, 0, 0, 0, 0, 0, 0, 0],
         );
         check(
-            LiveViewSourceRequest::default(),
+            LiveViewControlRequest::start(),
             [2, 9],
             &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3],
         );
         check(
-            LiveViewToggleRequest {
-                gate: LiveViewGate::Disable,
-            },
+            LiveViewControlRequest::stop(),
             [2, 9],
             &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4],
         );

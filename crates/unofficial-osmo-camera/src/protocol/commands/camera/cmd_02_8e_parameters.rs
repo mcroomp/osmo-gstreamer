@@ -37,6 +37,8 @@ pub struct Get<T: Parameter>(
 /// Single-parameter SET envelope; the payload is the same struct used for GET.
 /// Wrapping does not validate fields. Use payload constructors for checked values.
 /// Encoding alone grants no hardware permission.
+/// Public fields and decoded GET values remain manually encodable, including
+/// values outside constructor bounds. This is not a checked-write guarantee.
 ///
 /// ```
 /// use unofficial_osmo_camera::protocol::{
@@ -1447,6 +1449,8 @@ impl<T: Parameter> Query for Get<T> {
 }
 
 impl<T: Parameter> Set<T> {
+    /// Wrap the payload unchanged, without checking operation support or values.
+    /// Use the payload's `new(...)` constructor for its established SET subset.
     pub fn new(value: T) -> Self {
         Self(value)
     }
