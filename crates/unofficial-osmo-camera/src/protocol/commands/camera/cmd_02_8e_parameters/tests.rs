@@ -234,7 +234,7 @@ fn typed_get_does_not_apply_set_bounds_or_decode_rejections_as_values() {
         panic!("expected rejection");
     };
     assert_eq!(status, ResponseStatus::Unknown(0xe3));
-    assert_eq!(extension.0, [0, 0xff]);
+    assert_eq!(extension.as_slice(), [0, 0xff]);
 }
 
 #[test]

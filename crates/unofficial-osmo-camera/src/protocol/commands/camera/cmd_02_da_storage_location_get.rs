@@ -42,13 +42,13 @@ pub struct CameraStorageLocationReply {
     #[br(temp, assert(status == 0, "accepted reply requires success status"))]
     #[bw(calc = 0u8)]
     status: u8,
-    #[br(assert(raw.0.len() >= 6 && (1..=4).contains(&raw.0[3]) && raw.0.len() >= 5 + usize::from(raw.0[3]), Error::Protocol("invalid camera storage list")))]
-    raw: RemainingBytes,
+    #[br(assert((1..=4).contains(&raw.as_slice()[3]) && raw.as_slice().len() >= 5 + usize::from(raw.as_slice()[3]), Error::Protocol("invalid camera storage list")))]
+    raw: RemainingBytes<6>,
 }
 
 impl CameraStorageLocationReply {
     pub fn raw_bytes(&self) -> &[u8] {
-        &self.raw.0
+        self.raw.as_slice()
     }
 
     /// Return the selected entry's low two bits, not an arbitrary list member.
@@ -57,16 +57,16 @@ impl CameraStorageLocationReply {
     }
 
     pub fn entry_count(&self) -> u8 {
-        self.raw.0[3]
+        self.raw.as_slice()[3]
     }
 
     /// Return selected storage first, retaining all bits of every entry.
     pub fn entries(&self) -> &[u8] {
-        &self.raw.0[5..5 + usize::from(self.entry_count())]
+        &self.raw.as_slice()[5..5 + usize::from(self.entry_count())]
     }
 
     pub fn extension(&self) -> &[u8] {
-        &self.raw.0[5 + usize::from(self.entry_count())..]
+        &self.raw.as_slice()[5 + usize::from(self.entry_count())..]
     }
 }
 

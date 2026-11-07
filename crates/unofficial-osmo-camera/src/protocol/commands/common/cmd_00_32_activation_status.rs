@@ -56,7 +56,7 @@ mod tests {
         let value = ActivationStatusNotification {
             unknown: [0xa5; ACTIVATION_UNKNOWN_LENGTH],
             state: ActivationState::Other(0xff),
-            extension: RemainingBytes(vec![0xde, 0xad]),
+            extension: RemainingBytes::<0>::new(vec![0xde, 0xad]).unwrap(),
         };
         let mut bytes = encode(&value).unwrap();
         assert_eq!(

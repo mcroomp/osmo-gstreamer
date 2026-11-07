@@ -1,12 +1,9 @@
 //! Auto-exposure lock GET payload and response.
 
-use crate::{
-    Error,
-    protocol::{
-        Query,
-        commands::reply::{CommandReadReply, RemainingBytes},
-        identity::Endpoint,
-    },
+use crate::protocol::{
+    Query,
+    commands::reply::{CommandReadReply, RemainingBytes},
+    identity::Endpoint,
 };
 use binrw::{BinWrite, binrw};
 
@@ -41,13 +38,12 @@ pub struct CameraAeLockReply {
     #[br(temp, assert(status == 0, "accepted reply requires success status"))]
     #[bw(calc = 0u8)]
     status: u8,
-    #[br(assert(!raw.0.is_empty(), Error::Protocol("truncated CameraAeLockReply")))]
-    raw: RemainingBytes,
+    raw: RemainingBytes<1>,
 }
 
 impl CameraAeLockReply {
     pub fn raw_bytes(&self) -> &[u8] {
-        &self.raw.0
+        self.raw.as_slice()
     }
 
     /// Test only the low two bits; this is not a confirmed physical lock state.

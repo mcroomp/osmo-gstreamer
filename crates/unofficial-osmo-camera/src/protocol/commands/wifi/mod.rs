@@ -125,7 +125,7 @@ mod tests {
             panic!("expected accepted")
         };
         assert_eq!(value.ssid, "net");
-        assert_eq!(value.extension.0, [0xff, 0xab]);
+        assert_eq!(value.extension.as_slice(), [0xff, 0xab]);
         let reply = decode_payload::<CommandReadReply<WifiPasswordReply>>(bytes, ()).unwrap();
         assert_eq!(CommandPacket::payload(&reply).unwrap(), bytes);
         assert!(!format!("{reply:?}").contains("net"));
@@ -199,7 +199,8 @@ mod tests {
         );
         let retry = CameraReadReply::<RemainingBytes>::Rejected {
             status: cmd_07_47_join_network::JOIN_RETRY_STATUS,
-            extension: RemainingBytes(vec![cmd_07_47_join_network::JOIN_RETRY_DETAIL]),
+            extension: RemainingBytes::<0>::new(vec![cmd_07_47_join_network::JOIN_RETRY_DETAIL])
+                .unwrap(),
         };
         assert_eq!(encode(&retry).unwrap(), [1, 0xff]);
     }

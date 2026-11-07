@@ -1,12 +1,9 @@
 //! Audio GET payload and response.
 
-use crate::{
-    Error,
-    protocol::{
-        Query,
-        commands::reply::{CommandReadReply, RemainingBytes},
-        identity::Endpoint,
-    },
+use crate::protocol::{
+    Query,
+    commands::reply::{CommandReadReply, RemainingBytes},
+    identity::Endpoint,
 };
 use binrw::{BinWrite, binrw};
 
@@ -60,13 +57,12 @@ pub struct CameraAudioReply {
     #[br(temp, assert(status == 0, "accepted reply requires success status"))]
     #[bw(calc = 0u8)]
     status: u8,
-    #[br(assert(raw.0.len() >= AUDIO_PREFIX_LENGTH, Error::Protocol("truncated CameraAudioReply")))]
-    raw: RemainingBytes,
+    raw: RemainingBytes<AUDIO_PREFIX_LENGTH>,
 }
 
 impl CameraAudioReply {
     pub fn raw_bytes(&self) -> &[u8] {
-        &self.raw.0
+        self.raw.as_slice()
     }
 
     pub fn data_prefix(&self) -> &[u8] {

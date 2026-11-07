@@ -128,7 +128,7 @@ mod tests {
             })
         );
         assert_eq!(value.unmapped_prefix, 1);
-        assert_eq!(value.extension.0, [0xAA]);
+        assert_eq!(value.extension.as_slice(), [0xAA]);
         assert_eq!(CommandPacket::payload(&value).unwrap()[1..], bytes[1..]);
 
         let direct =

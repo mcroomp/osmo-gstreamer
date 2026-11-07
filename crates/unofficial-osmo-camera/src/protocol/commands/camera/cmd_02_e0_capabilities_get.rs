@@ -58,13 +58,12 @@ pub struct EiRangeReply {
     #[br(temp, assert(status == 0, "accepted reply requires success status"))]
     #[bw(calc = 0u8)]
     status: u8,
-    #[br(assert(!raw.0.is_empty(), "accepted EI range has no data"))]
-    raw: RemainingBytes,
+    raw: RemainingBytes<1>,
 }
 
 impl EiRangeReply {
     pub fn raw_bytes(&self) -> &[u8] {
-        &self.raw.0
+        self.raw.as_slice()
     }
 }
 
@@ -76,13 +75,12 @@ pub struct RecommendedEiReply {
     #[br(temp, assert(status == 0, "accepted reply requires success status"))]
     #[bw(calc = 0u8)]
     status: u8,
-    #[br(assert(!raw.0.is_empty(), "accepted recommended EI has no data"))]
-    raw: RemainingBytes,
+    raw: RemainingBytes<1>,
 }
 
 impl RecommendedEiReply {
     pub fn raw_bytes(&self) -> &[u8] {
-        &self.raw.0
+        self.raw.as_slice()
     }
 }
 
@@ -94,13 +92,12 @@ pub struct LensInformationReply {
     #[br(temp, assert(status == 0, "accepted reply requires success status"))]
     #[bw(calc = 0u8)]
     status: u8,
-    #[br(assert(!raw.0.is_empty(), "accepted lens information has no data"))]
-    raw: RemainingBytes,
+    raw: RemainingBytes<1>,
 }
 
 impl LensInformationReply {
     pub fn raw_bytes(&self) -> &[u8] {
-        &self.raw.0
+        self.raw.as_slice()
     }
 }
 
@@ -215,7 +212,7 @@ mod tests {
         }
         let invalid = AccessoriesData::Rejected {
             status: ResponseStatus::Success,
-            extension: RemainingBytes(vec![0xaa]),
+            extension: RemainingBytes::<0>::new(vec![0xaa]).unwrap(),
         };
         assert!(encode(&invalid).is_err());
         assert!(
@@ -236,7 +233,7 @@ mod tests {
             reply,
             CameraReadReply::Rejected {
                 status: ResponseStatus::Unknown(0xe0),
-                extension: RemainingBytes(vec![2, 0, 3]),
+                extension: RemainingBytes::<0>::new(vec![2, 0, 3]).unwrap(),
             }
         );
         assert_eq!(encode(&reply).unwrap(), [0xe0, 2, 0, 3]);
@@ -249,7 +246,7 @@ mod tests {
             reply,
             CameraReadReply::Accepted(AccessoriesData::Rejected {
                 status: ResponseStatus::Unknown(0xe0),
-                extension: RemainingBytes(vec![0xaa]),
+                extension: RemainingBytes::<0>::new(vec![0xaa]).unwrap(),
             })
         );
         for bytes in [[0, 1, 0xe0, 4], [0, 2, 0xe0, 3], [0, 2, 0xe0, 5]] {
@@ -274,7 +271,7 @@ mod tests {
         assert!(!value.supports_wifi_share());
         assert_eq!(value.raw_flags, 0x82);
         assert_eq!(value.unmapped_byte, 0xa5);
-        assert_eq!(value.extension.0, [0x99]);
+        assert_eq!(value.extension.as_slice(), [0x99]);
     }
 
     #[test]

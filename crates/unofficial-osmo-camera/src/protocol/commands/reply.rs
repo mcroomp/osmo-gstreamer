@@ -1,11 +1,11 @@
 //! Shared status-bearing payload types used by command replies.
 
+#[cfg(test)]
+use crate::protocol::decode;
 use crate::{
-    Error,
+    Error, Result,
     protocol::{ResponseStatus, binrw_error},
 };
-#[cfg(test)]
-use crate::{Result, protocol::decode};
 use binrw::{
     BinRead, BinResult, BinWrite, Endian,
     helpers::until_eof,
@@ -168,9 +168,34 @@ impl<T: BinRead> BinRead for CameraReadReply<T> {
 
 /// Opaque bytes read through EOF of a bounded payload reader.
 ///
+/// Construction, decoding and encoding require at least `MIN` bytes.
+/// The default minimum is zero, so optional tails and rejections may be empty.
 /// Retains unmapped fields without interpretation; not for live transport readers.
 #[derive(Clone, PartialEq, Eq, BinRead, BinWrite)]
-pub struct RemainingBytes(#[br(parse_with = until_eof)] pub Vec<u8>);
+pub struct RemainingBytes<const MIN: usize = 0> {
+    #[br(parse_with = until_eof, assert(bytes.len() >= MIN, Error::Protocol("remaining bytes are shorter than the required minimum")))]
+    #[bw(assert(bytes.len() >= MIN, Error::Protocol("remaining bytes are shorter than the required minimum")))]
+    bytes: Vec<u8>,
+}
+
+impl<const MIN: usize> RemainingBytes<MIN> {
+    pub fn new(bytes: Vec<u8>) -> Result<Self> {
+        if bytes.len() < MIN {
+            return Err(Error::Protocol(
+                "remaining bytes are shorter than the required minimum",
+            ));
+        }
+        Ok(Self { bytes })
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn into_vec(self) -> Vec<u8> {
+        self.bytes
+    }
+}
 
 #[cfg(test)]
 pub(crate) fn decode_payload<T>(bytes: &[u8], (): ()) -> Result<T>
@@ -192,10 +217,10 @@ where
     decode_payload(&payload, ())
 }
 
-impl Debug for RemainingBytes {
+impl<const MIN: usize> Debug for RemainingBytes<MIN> {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("RemainingBytes")
-            .field("length", &self.0.len())
+            .field("length", &self.bytes.len())
             .finish()
     }
 }
@@ -206,6 +231,53 @@ mod tests {
     use crate::protocol::{decode, encode};
     use binrw::binrw;
     use std::io::Cursor;
+
+    #[test]
+    fn remaining_bytes_enforce_each_minimum_at_every_boundary() {
+        fn check<const MIN: usize>() {
+            for length in [MIN, MIN + 1, MIN + 3] {
+                let bytes = vec![0xaa; length];
+                let value = RemainingBytes::<MIN>::new(bytes.clone()).unwrap();
+                assert_eq!(value.as_slice(), bytes);
+                assert_eq!(value.clone().into_vec(), bytes);
+                assert_eq!(encode(&value).unwrap(), bytes);
+                assert_eq!(decode::<RemainingBytes<MIN>>(&bytes, ()).unwrap(), value);
+                assert_eq!(
+                    format!("{value:?}"),
+                    format!("RemainingBytes {{ length: {} }}", bytes.len())
+                );
+                let mut framed = vec![0xa5; 3];
+                framed.extend_from_slice(&bytes);
+                let mut reader = Cursor::new(&framed);
+                reader.set_position(3);
+                let decoded =
+                    RemainingBytes::<MIN>::read_options(&mut reader, Endian::Big, ()).unwrap();
+                assert_eq!(decoded, value);
+                assert_eq!(reader.position(), framed.len() as u64);
+                let mut writer = Cursor::new(vec![0xa5; 3]);
+                writer.set_position(3);
+                decoded.write_options(&mut writer, Endian::Big, ()).unwrap();
+                assert_eq!(writer.into_inner(), framed);
+            }
+            for length in 0..MIN {
+                let bytes = vec![0xaa; length];
+                assert!(RemainingBytes::<MIN>::new(bytes.clone()).is_err());
+                assert!(decode::<RemainingBytes<MIN>>(&bytes, ()).is_err());
+                let invalid = RemainingBytes::<MIN> { bytes };
+                assert!(encode(&invalid).is_err());
+                assert!(
+                    invalid
+                        .write_options(&mut Cursor::new(Vec::new()), Endian::Big, ())
+                        .is_err()
+                );
+            }
+        }
+        check::<0>();
+        check::<1>();
+        check::<2>();
+        check::<6>();
+        check::<15>();
+    }
 
     #[binrw]
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -227,7 +299,7 @@ mod tests {
         );
         let rejected = CommandReadReply::<SyntheticReply>::Rejected {
             status: ResponseStatus::Unknown(0xe3),
-            extension: RemainingBytes(vec![0xaa, 0xbb]),
+            extension: RemainingBytes::<0>::new(vec![0xaa, 0xbb]).unwrap(),
         };
         assert_eq!(encode(&rejected).unwrap(), [2, 0xda, 0xe3, 0xaa, 0xbb]);
         assert_eq!(
@@ -248,7 +320,7 @@ mod tests {
         assert!(
             encode(&CommandReadReply::<SyntheticReply>::Rejected {
                 status: ResponseStatus::Success,
-                extension: RemainingBytes(vec![]),
+                extension: RemainingBytes::<0>::new(vec![]).unwrap(),
             })
             .is_err()
         );
@@ -269,7 +341,7 @@ mod tests {
             reply,
             CameraReadReply::Rejected {
                 status: ResponseStatus::Unknown(0xe3),
-                extension: RemainingBytes(vec![1, 2]),
+                extension: RemainingBytes::<0>::new(vec![1, 2]).unwrap(),
             }
         );
         assert_eq!(encode(&reply).unwrap(), b"\xe3\x01\x02");
@@ -279,7 +351,7 @@ mod tests {
     fn rejected_read_cannot_use_success_status() {
         let reply = CameraReadReply::<RemainingBytes>::Rejected {
             status: ResponseStatus::Success,
-            extension: RemainingBytes(vec![]),
+            extension: RemainingBytes::<0>::new(vec![]).unwrap(),
         };
         assert!(encode(&reply).is_err());
     }

@@ -1,12 +1,9 @@
 //! Camera-language GET payload and response.
 
-use crate::{
-    Error,
-    protocol::{
-        Query,
-        commands::reply::{CommandReadReply, RemainingBytes},
-        identity::Endpoint,
-    },
+use crate::protocol::{
+    Query,
+    commands::reply::{CommandReadReply, RemainingBytes},
+    identity::Endpoint,
 };
 use binrw::{BinWrite, binrw};
 
@@ -39,13 +36,12 @@ pub struct CameraLanguageReply {
     #[br(temp, assert(status == 0, "accepted reply requires success status"))]
     #[bw(calc = 0u8)]
     status: u8,
-    #[br(assert(!raw.0.is_empty(), Error::Protocol("truncated CameraLanguageReply")))]
-    raw: RemainingBytes,
+    raw: RemainingBytes<1>,
 }
 
 impl CameraLanguageReply {
     pub fn raw_bytes(&self) -> &[u8] {
-        &self.raw.0
+        self.raw.as_slice()
     }
 
     /// Signed view of the raw byte, without assigning a language or sentinel meaning.

@@ -227,7 +227,7 @@ mod tests {
         check(
             CameraStateNotification {
                 state: 0x4000_0000,
-                extension: RemainingBytes(vec![0xa5]),
+                extension: RemainingBytes::<0>::new(vec![0xa5]).unwrap(),
             },
             [2, 0x80],
             &[0, 0, 0, 0x40, 0xa5],
@@ -235,7 +235,7 @@ mod tests {
         check(
             PairingApprovalNotification {
                 approval: PairingApproval::Unknown(5),
-                extension: RemainingBytes(vec![0xab]),
+                extension: RemainingBytes::<0>::new(vec![0xab]).unwrap(),
             },
             [7, 0x46],
             &[5, 0xab],
@@ -246,7 +246,7 @@ mod tests {
     fn notification_decoding_cannot_accept_another_command_with_the_same_payload() {
         let packet = PairingApprovalNotification {
             approval: PairingApproval::Accepted01,
-            extension: RemainingBytes(vec![]),
+            extension: RemainingBytes::<0>::new(vec![]).unwrap(),
         };
         let mut message = packet
             .frame(MessageContext {

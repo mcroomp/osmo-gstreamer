@@ -1189,13 +1189,13 @@ impl<I: BleIo> Worker<I> {
                         reason: "missing status byte",
                     }
                 })?;
-            if matches!(&response, CameraReadReply::Accepted(data) if data.0.iter().all(|byte| *byte == 0))
+            if matches!(&response, CameraReadReply::Accepted(data) if data.as_slice().iter().all(|byte| *byte == 0))
             {
                 log::info!("Camera accepted router join; LAN reachability is not yet established");
                 return Ok(());
             }
             if matches!(&response, CameraReadReply::Rejected { status, extension }
-                if *status == JOIN_RETRY_STATUS && extension.0.first() == Some(&JOIN_RETRY_DETAIL))
+                if *status == JOIN_RETRY_STATUS && extension.as_slice().first() == Some(&JOIN_RETRY_DETAIL))
                 && attempt + 1 < MAX_JOIN_ATTEMPTS
             {
                 log::warn!(
@@ -1341,7 +1341,7 @@ mod tests {
     fn join_retry_reply() -> Vec<u8> {
         encode(&CameraReadReply::<RemainingBytes>::Rejected {
             status: JOIN_RETRY_STATUS,
-            extension: RemainingBytes(vec![JOIN_RETRY_DETAIL]),
+            extension: RemainingBytes::<0>::new(vec![JOIN_RETRY_DETAIL]).unwrap(),
         })
         .unwrap()
     }
@@ -1357,7 +1357,7 @@ mod tests {
                     crate::protocol::CommandPacket::payload(&ActivationStatusNotification {
                         unknown: [0xa5; ACTIVATION_UNKNOWN_LENGTH],
                         state: ActivationState::Unknown02,
-                        extension: RemainingBytes(vec![0xab]),
+                        extension: RemainingBytes::<0>::new(vec![0xab]).unwrap(),
                     })
                     .unwrap();
                 let message = Message {
@@ -1605,12 +1605,12 @@ mod tests {
                     response.payload = if request.command == Command::Wifi(WifiCommand::Ssid) {
                         crate::protocol::CommandPacket::payload(&WifiSsidReply {
                             ssid: TEST_SSID.to_owned(),
-                            extension: RemainingBytes(vec![]),
+                            extension: RemainingBytes::<0>::new(vec![]).unwrap(),
                         })?
                     } else {
                         crate::protocol::CommandPacket::payload(&WifiPasswordReply {
                             password: TEST_PASSWORD.to_owned(),
-                            extension: RemainingBytes(vec![]),
+                            extension: RemainingBytes::<0>::new(vec![]).unwrap(),
                         })?
                     };
                 }

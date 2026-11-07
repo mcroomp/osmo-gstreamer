@@ -1,13 +1,10 @@
 //! Photo-interval GET payload and response.
 
-use crate::{
-    Error,
-    protocol::{
-        Query,
-        commands::reply::{CommandReadReply, RemainingBytes},
-        identity::Endpoint,
-        u16_at, u32_at,
-    },
+use crate::protocol::{
+    Query,
+    commands::reply::{CommandReadReply, RemainingBytes},
+    identity::Endpoint,
+    u16_at, u32_at,
 };
 use binrw::{BinWrite, binrw};
 
@@ -50,13 +47,12 @@ pub struct CameraPhotoIntervalReply {
     #[br(temp, assert(status == 0, "accepted reply requires success status"))]
     #[bw(calc = 0u8)]
     status: u8,
-    #[br(assert(raw.0.len() >= 6, Error::Protocol("truncated CameraPhotoIntervalReply")))]
-    raw: RemainingBytes,
+    raw: RemainingBytes<6>,
 }
 
 impl CameraPhotoIntervalReply {
     pub fn raw_bytes(&self) -> &[u8] {
-        &self.raw.0
+        self.raw.as_slice()
     }
 
     /// Compatibility name for the second raw code, not a confirmed count.

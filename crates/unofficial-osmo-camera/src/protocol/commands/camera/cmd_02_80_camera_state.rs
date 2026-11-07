@@ -116,7 +116,7 @@ impl CameraStateNotification {
     /// Apply compatibility labels when payload offset 4 is present.
     pub fn content_mode(&self) -> Option<CameraContentMode> {
         self.extension
-            .0
+            .as_slice()
             .get(CAMERA_CONTENT_MODE_EXTENSION_OFFSET)
             .copied()
             .map(CameraContentMode::from)
@@ -125,7 +125,7 @@ impl CameraStateNotification {
     /// Return the model-qualified capture-mode code when payload offset 57 is present.
     pub fn nano_capture_mode(&self) -> Option<NanoCaptureMode> {
         self.extension
-            .0
+            .as_slice()
             .get(CAMERA_CAPTURE_MODE_EXTENSION_OFFSET)
             .copied()
             .map(|code| {
@@ -156,13 +156,13 @@ mod tests {
         let value = decode_state(&bytes).unwrap();
         assert!(value.playback_mode_active());
         assert_eq!(CommandPacket::payload(&value).unwrap(), bytes);
-        assert_eq!(value.extension.0, [0xde, 0xad]);
+        assert_eq!(value.extension.as_slice(), [0xde, 0xad]);
         for length in 0..CAMERA_STATE_PREFIX_LENGTH {
             assert!(decode_state(&bytes[..length]).is_err());
         }
         let value = CameraStateNotification {
             state: !PLAYBACK_STATE_MASK,
-            extension: RemainingBytes(vec![]),
+            extension: RemainingBytes::<0>::new(vec![]).unwrap(),
         };
         assert!(!value.playback_mode_active());
     }

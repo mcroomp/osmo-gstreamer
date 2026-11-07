@@ -159,8 +159,16 @@ Command declarations and opaque response structs are explicit; the former
 Command codecs use native binrw fields, calculated constants and lengths,
 and field assertions rather than mapping entire structs through wire tuples.
 Opaque replies keep their raw byte accessors and uninterpreted extensions.
+`RemainingBytes<const MIN: usize = 0>` reads opaque tails through EOF of a bounded
+payload reader and enforces the minimum on construction, decoding and encoding.
+Private storage is exposed through `as_slice()` or consumed with `into_vec()`.
+`RemainingBytes` allows empty tails/rejections; `RemainingBytes<1>` requires data.
+Larger fixed minimums use the same type; embedded lengths/counts retain explicit
+command-specific checks. Construct values with `RemainingBytes::<MIN>::new(bytes)`.
 Custom codecs remain for shared contextual replies and checked packed strings;
-accessory and media-state alternatives use derived binrw enums.
+accessory and media-state alternatives use derived binrw enums. Media rejections
+read directly through EOF with branch assertions; calibration-file records share
+their nested data-length calculation between construction and wire codecs.
 
 Numeric enums no longer provide generated primitive `From`/`Into`/`TryFrom`
 implementations, and no numeric-enum conversion dependency is required.

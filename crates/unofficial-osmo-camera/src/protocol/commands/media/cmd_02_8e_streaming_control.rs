@@ -2,14 +2,13 @@
 //! Camera endpoint 0x01 uses a separate parameter contract.
 
 use crate::{
-    Error, Result,
+    Error,
     protocol::{
         Query,
-        commands::reply::RemainingBytes,
         identity::{CameraCommand, Command, Endpoint},
     },
 };
-use binrw::{BinRead, BinWrite, binwrite};
+use binrw::{BinRead, BinWrite, binwrite, helpers::until_eof};
 
 /// Requests a streaming control operation at the media endpoint.
 #[binwrite]
@@ -69,28 +68,9 @@ pub enum MediaStreamingStateData {
     #[brw(magic = b"\x00\x00\x01\x1c\x00\x09")]
     State([u8; 9]),
     Rejected(
-        #[br(try_map = Self::read_rejection)]
-        #[bw(try_map = |bytes: &Vec<u8>| Self::rejection_bytes(bytes))]
+        #[br(parse_with = until_eof)]
+        #[brw(assert(!self_0.is_empty(), Error::Protocol("missing media running-state result")))]
+        #[brw(assert(self_0[0] != 0 || self_0.get(1).is_some_and(|byte| *byte != 0), Error::Protocol("rejected media state cannot encode success")))]
         Vec<u8>,
     ),
-}
-
-impl MediaStreamingStateData {
-    fn read_rejection(raw: RemainingBytes) -> Result<Vec<u8>> {
-        Self::rejection_bytes(&raw.0)?;
-        Ok(raw.0)
-    }
-
-    fn rejection_bytes(bytes: &[u8]) -> Result<&[u8]> {
-        let Some(&first) = bytes.first() else {
-            return Err(Error::Protocol("missing media running-state result"));
-        };
-        if first != 0 || bytes.get(1).is_some_and(|byte| *byte != 0) {
-            Ok(bytes)
-        } else {
-            Err(Error::Protocol(
-                "rejected media state cannot encode success",
-            ))
-        }
-    }
 }

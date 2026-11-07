@@ -1156,15 +1156,15 @@ impl Parameter for LensUserCalibrationStateValue {}
 #[binrw]
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[br(assert(usize::from(length) == 3 + usize::from(data_length)))]
-#[br(assert(usize::from(data_length) == name.wire_length() + second_name.as_ref().map_or(0, CalibrationName::wire_length)))]
+#[br(assert(usize::from(data_length) == Self::data_wire_length(&name, second_name.as_ref())))]
 #[brw(little, magic = 0x002du16)]
 pub struct LensUserCalibrationFileValue {
     #[br(temp)]
-    #[bw(try_calc = u8::try_from(3 + name.wire_length() + second_name.as_ref().map_or(0, CalibrationName::wire_length)).map_err(|_| Error::LimitExceeded("camera TLV exceeds 255 bytes")))]
+    #[bw(try_calc = u8::try_from(3 + Self::data_wire_length(name, second_name.as_ref())).map_err(|_| Error::LimitExceeded("camera TLV exceeds 255 bytes")))]
     length: u8,
     pub operation: u8,
     #[br(temp)]
-    #[bw(try_calc = u16::try_from(name.wire_length() + second_name.as_ref().map_or(0, CalibrationName::wire_length)).map_err(|_| Error::LimitExceeded("calibration-file data exceeds 65535 bytes")))]
+    #[bw(try_calc = u16::try_from(Self::data_wire_length(name, second_name.as_ref())).map_err(|_| Error::LimitExceeded("calibration-file data exceeds 65535 bytes")))]
     data_length: u16,
     pub name: CalibrationName,
     #[br(if(operation == 1))]
@@ -1187,9 +1187,7 @@ impl LensUserCalibrationFileValue {
         if let Some(second) = &second_name {
             second.validate()?;
         }
-        if 3 + name.wire_length() + second_name.as_ref().map_or(0, CalibrationName::wire_length)
-            > usize::from(u8::MAX)
-        {
+        if 3 + Self::data_wire_length(&name, second_name.as_ref()) > usize::from(u8::MAX) {
             return Err(Error::Unsupported(
                 "calibration-file record exceeds TLV length",
             ));
@@ -1199,6 +1197,10 @@ impl LensUserCalibrationFileValue {
             name,
             second_name,
         })
+    }
+
+    fn data_wire_length(name: &CalibrationName, second_name: Option<&CalibrationName>) -> usize {
+        name.wire_length() + second_name.map_or(0, CalibrationName::wire_length)
     }
 }
 

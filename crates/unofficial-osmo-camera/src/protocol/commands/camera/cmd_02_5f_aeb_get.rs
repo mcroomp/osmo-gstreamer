@@ -1,12 +1,9 @@
 //! Automatic exposure-bracketing GET payload and response.
 
-use crate::{
-    Error,
-    protocol::{
-        Query,
-        commands::reply::{CommandReadReply, RemainingBytes},
-        identity::Endpoint,
-    },
+use crate::protocol::{
+    Query,
+    commands::reply::{CommandReadReply, RemainingBytes},
+    identity::Endpoint,
 };
 use binrw::{BinWrite, binrw};
 
@@ -39,13 +36,12 @@ pub struct CameraAebReply {
     #[br(temp, assert(status == 0, "accepted reply requires success status"))]
     #[bw(calc = 0u8)]
     status: u8,
-    #[br(assert(raw.0.len() >= 2, Error::Protocol("truncated CameraAebReply")))]
-    raw: RemainingBytes,
+    raw: RemainingBytes<2>,
 }
 
 impl CameraAebReply {
     pub fn raw_bytes(&self) -> &[u8] {
-        &self.raw.0
+        self.raw.as_slice()
     }
 
     pub fn codes(&self) -> [u8; 2] {

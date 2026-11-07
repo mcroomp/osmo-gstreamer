@@ -1,12 +1,9 @@
 //! User ISO parameter GET.
 
-use crate::{
-    Error,
-    protocol::{
-        Query,
-        commands::reply::{CommandReadReply, RemainingBytes},
-        identity::Endpoint,
-    },
+use crate::protocol::{
+    Query,
+    commands::reply::{CommandReadReply, RemainingBytes},
+    identity::Endpoint,
 };
 use binrw::{BinWrite, binrw};
 
@@ -79,13 +76,12 @@ pub struct CameraUserIsoReply {
     #[br(temp, assert(status == 0, "accepted reply requires success status"))]
     #[bw(calc = 0u8)]
     status: u8,
-    #[br(assert(!raw.0.is_empty(), Error::Protocol("truncated CameraUserIsoReply")))]
-    raw: RemainingBytes,
+    raw: RemainingBytes<1>,
 }
 
 impl CameraUserIsoReply {
     pub fn raw_bytes(&self) -> &[u8] {
-        &self.raw.0
+        self.raw.as_slice()
     }
 
     pub fn code(&self) -> u8 {

@@ -50,14 +50,13 @@ pub struct CameraWatermarkReply {
     #[br(temp, assert(status == 0, "accepted reply requires success status"))]
     #[bw(calc = 0u8)]
     status: u8,
-    #[br(assert(raw.0.len() >= WATERMARK_HEADER_LENGTH, Error::Protocol("truncated watermark metadata header")))]
-    #[br(assert(raw.0.len() >= WATERMARK_HEADER_LENGTH + usize::from(u16_at(&raw.0, 2)), Error::Protocol("truncated watermark metadata value")))]
-    raw: RemainingBytes,
+    #[br(assert(raw.as_slice().len() >= WATERMARK_HEADER_LENGTH + usize::from(u16_at(raw.as_slice(), 2)), Error::Protocol("truncated watermark metadata value")))]
+    raw: RemainingBytes<WATERMARK_HEADER_LENGTH>,
 }
 
 impl CameraWatermarkReply {
     pub fn raw_bytes(&self) -> &[u8] {
-        &self.raw.0
+        self.raw.as_slice()
     }
 
     /// Return the low flag byte for compatibility; use `raw_flags_word` for all bits.
@@ -66,24 +65,24 @@ impl CameraWatermarkReply {
     }
 
     pub fn raw_flags_word(&self) -> u16 {
-        u16_at(&self.raw.0, 0)
+        u16_at(self.raw.as_slice(), 0)
     }
 
     pub fn value_length(&self) -> u16 {
-        u16_at(&self.raw.0, 2)
+        u16_at(self.raw.as_slice(), 2)
     }
 
     pub fn opaque_byte(&self) -> u8 {
-        self.raw.0[4]
+        self.raw.as_slice()[4]
     }
 
     /// Return uninterpreted value bytes, without assuming text or a terminator.
     pub fn value(&self) -> &[u8] {
-        &self.raw.0[WATERMARK_HEADER_LENGTH..self.value_end()]
+        &self.raw.as_slice()[WATERMARK_HEADER_LENGTH..self.value_end()]
     }
 
     pub fn trailing_bytes(&self) -> &[u8] {
-        &self.raw.0[self.value_end()..]
+        &self.raw.as_slice()[self.value_end()..]
     }
 
     fn value_end(&self) -> usize {

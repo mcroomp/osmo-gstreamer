@@ -40,29 +40,29 @@ pub struct WifiCountryReply {
     #[br(temp, assert(status == 0, "accepted reply requires success status"))]
     #[bw(calc = 0u8)]
     status: u8,
-    #[br(assert(matches!(raw.0.as_slice(), [_, _, 0] | [0xff, _, _, 0, ..]), Error::Protocol("invalid Wi-Fi country reply layout")))]
+    #[br(assert(matches!(raw.as_slice(), [_, _, 0] | [0xff, _, _, 0, ..]), Error::Protocol("invalid Wi-Fi country reply layout")))]
     raw: RemainingBytes,
 }
 
 impl WifiCountryReply {
     pub fn raw_bytes(&self) -> &[u8] {
-        &self.raw.0
+        self.raw.as_slice()
     }
 
     /// Return `Some(0xFF)` for prefixed data, or `None` for compact data.
     pub fn format_prefix(&self) -> Option<u8> {
-        (self.raw.0.len() > 3).then_some(0xff)
+        (self.raw.as_slice().len() > 3).then_some(0xff)
     }
 
     /// Return the code bytes without requiring an alphabet or UTF-8.
     pub fn country_code_raw(&self) -> [u8; 2] {
         let start = usize::from(self.format_prefix().is_some());
-        [self.raw.0[start], self.raw.0[start + 1]]
+        [self.raw.as_slice()[start], self.raw.as_slice()[start + 1]]
     }
 
     pub fn extension(&self) -> &[u8] {
         let header_length = 3 + usize::from(self.format_prefix().is_some());
-        &self.raw.0[header_length..]
+        &self.raw.as_slice()[header_length..]
     }
 }
 

@@ -9,8 +9,8 @@ use std::fmt::{Debug, Formatter, Result as FmtResult};
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[bw(little, magic = b"\x08\x78")]
 pub struct MediaStreamingSettings {
-    #[bw(calc = [0u8])]
-    prefix: [u8; 1],
+    #[bw(calc = 0u8)]
+    operation: u8,
     #[bw(try_calc = profile.wire_length())]
     profile_length: u16,
     pub profile: MediaStreamingProfile,
