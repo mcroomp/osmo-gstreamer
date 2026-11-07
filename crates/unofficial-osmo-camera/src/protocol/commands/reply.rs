@@ -21,7 +21,7 @@ use std::{
 /// `T` owns the command magic and the successful status field. Rejection data
 /// uses `R` only when the command has a meaningful, established rejection layout.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CommandReadReply<T, R = CameraRawData> {
+pub enum CommandReadReply<T, R = RemainingBytes> {
     Accepted(T),
     Rejected {
         status: ResponseStatus,
@@ -112,7 +112,7 @@ pub enum CameraReadReply<T> {
     Accepted(T),
     Rejected {
         status: ResponseStatus,
-        extension: CameraRawData,
+        extension: RemainingBytes,
     },
 }
 
@@ -159,16 +159,18 @@ impl<T: BinRead> BinRead for CameraReadReply<T> {
         if status != ResponseStatus::Success {
             return Ok(Self::Rejected {
                 status,
-                extension: CameraRawData::read_options(reader, endian, ())?,
+                extension: RemainingBytes::read_options(reader, endian, ())?,
             });
         }
         Ok(Self::Accepted(T::read_options(reader, endian, args)?))
     }
 }
 
-/// Opaque payload bytes retained without interpreting unmapped fields.
+/// Opaque bytes read through EOF of a bounded payload reader.
+///
+/// Retains unmapped fields without interpretation; not for live transport readers.
 #[derive(Clone, PartialEq, Eq, BinRead, BinWrite)]
-pub struct CameraRawData(#[br(parse_with = until_eof)] pub Vec<u8>);
+pub struct RemainingBytes(#[br(parse_with = until_eof)] pub Vec<u8>);
 
 #[cfg(test)]
 pub(crate) fn decode_payload<T>(bytes: &[u8], (): ()) -> Result<T>
@@ -190,9 +192,9 @@ where
     decode_payload(&payload, ())
 }
 
-impl Debug for CameraRawData {
+impl Debug for RemainingBytes {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        f.debug_struct("CameraRawData")
+        f.debug_struct("RemainingBytes")
             .field("length", &self.0.len())
             .finish()
     }
@@ -225,7 +227,7 @@ mod tests {
         );
         let rejected = CommandReadReply::<SyntheticReply>::Rejected {
             status: ResponseStatus::Unknown(0xe3),
-            extension: CameraRawData(vec![0xaa, 0xbb]),
+            extension: RemainingBytes(vec![0xaa, 0xbb]),
         };
         assert_eq!(encode(&rejected).unwrap(), [2, 0xda, 0xe3, 0xaa, 0xbb]);
         assert_eq!(
@@ -246,7 +248,7 @@ mod tests {
         assert!(
             encode(&CommandReadReply::<SyntheticReply>::Rejected {
                 status: ResponseStatus::Success,
-                extension: CameraRawData(vec![]),
+                extension: RemainingBytes(vec![]),
             })
             .is_err()
         );
@@ -262,12 +264,12 @@ mod tests {
 
     #[test]
     fn rejected_read_keeps_status_and_opaque_extension() {
-        let reply = decode::<CameraReadReply<CameraRawData>>(b"\xe3\x01\x02", ()).unwrap();
+        let reply = decode::<CameraReadReply<RemainingBytes>>(b"\xe3\x01\x02", ()).unwrap();
         assert_eq!(
             reply,
             CameraReadReply::Rejected {
                 status: ResponseStatus::Unknown(0xe3),
-                extension: CameraRawData(vec![1, 2]),
+                extension: RemainingBytes(vec![1, 2]),
             }
         );
         assert_eq!(encode(&reply).unwrap(), b"\xe3\x01\x02");
@@ -275,9 +277,9 @@ mod tests {
 
     #[test]
     fn rejected_read_cannot_use_success_status() {
-        let reply = CameraReadReply::<CameraRawData>::Rejected {
+        let reply = CameraReadReply::<RemainingBytes>::Rejected {
             status: ResponseStatus::Success,
-            extension: CameraRawData(vec![]),
+            extension: RemainingBytes(vec![]),
         };
         assert!(encode(&reply).is_err());
     }

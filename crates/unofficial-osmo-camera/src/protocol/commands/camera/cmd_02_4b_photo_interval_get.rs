@@ -4,7 +4,7 @@ use crate::{
     Error,
     protocol::{
         Query,
-        commands::reply::{CameraRawData, CommandReadReply},
+        commands::reply::{CommandReadReply, RemainingBytes},
         identity::Endpoint,
         u16_at, u32_at,
     },
@@ -51,7 +51,7 @@ pub struct CameraPhotoIntervalReply {
     #[bw(calc = 0u8)]
     status: u8,
     #[br(assert(raw.0.len() >= 6, Error::Protocol("truncated CameraPhotoIntervalReply")))]
-    raw: CameraRawData,
+    raw: RemainingBytes,
 }
 
 impl CameraPhotoIntervalReply {

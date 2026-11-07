@@ -5,7 +5,7 @@ use crate::{
     Error, Result,
     protocol::{
         Query,
-        commands::reply::CameraRawData,
+        commands::reply::RemainingBytes,
         identity::{CameraCommand, Command, Endpoint},
     },
 };
@@ -76,7 +76,7 @@ pub enum MediaStreamingStateData {
 }
 
 impl MediaStreamingStateData {
-    fn read_rejection(raw: CameraRawData) -> Result<Vec<u8>> {
+    fn read_rejection(raw: RemainingBytes) -> Result<Vec<u8>> {
         Self::rejection_bytes(&raw.0)?;
         Ok(raw.0)
     }

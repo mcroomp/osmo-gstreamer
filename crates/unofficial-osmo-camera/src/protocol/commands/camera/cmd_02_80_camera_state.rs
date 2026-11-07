@@ -1,6 +1,6 @@
 //! Camera state notification prefix.
 
-use crate::protocol::{commands::reply::CameraRawData, decode};
+use crate::protocol::{commands::reply::RemainingBytes, decode};
 use binrw::{BinRead, BinWrite};
 use std::mem::size_of;
 
@@ -28,7 +28,7 @@ use std::mem::size_of;
 #[brw(magic = b"\x02\x80")]
 pub struct CameraStateNotification {
     pub state: u32,
-    pub extension: CameraRawData,
+    pub extension: RemainingBytes,
 }
 
 pub const PLAYBACK_STATE_MASK: u32 = 0x4000_0000;
@@ -162,7 +162,7 @@ mod tests {
         }
         let value = CameraStateNotification {
             state: !PLAYBACK_STATE_MASK,
-            extension: CameraRawData(vec![]),
+            extension: RemainingBytes(vec![]),
         };
         assert!(!value.playback_mode_active());
     }

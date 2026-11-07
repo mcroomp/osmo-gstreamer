@@ -1,6 +1,6 @@
 //! Pairing-approval notification.
 
-use crate::protocol::commands::reply::CameraRawData;
+use crate::protocol::commands::reply::RemainingBytes;
 use binrw::{BinRead, BinWrite};
 
 /// Receive a pairing decision byte, retaining unknown values and trailing bytes.
@@ -20,7 +20,7 @@ use binrw::{BinRead, BinWrite};
 #[brw(magic = b"\x07\x46")]
 pub struct PairingApprovalNotification {
     pub approval: PairingApproval,
-    pub extension: CameraRawData,
+    pub extension: RemainingBytes,
 }
 
 /// Raw decision codes with legacy names, not an authorization result enum.

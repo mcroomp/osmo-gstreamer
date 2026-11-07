@@ -34,7 +34,7 @@ use crate::{
                 cmd_00_32_activation_status::{ActivationState, ActivationStatusNotification},
                 cmd_00_81_device_info::AppDeviceInfoResponse,
             },
-            reply::{CameraRawData, CameraReadReply, CommandReadReply},
+            reply::{CameraReadReply, CommandReadReply, RemainingBytes},
             wifi::{
                 cmd_07_0c_mac_get::WifiMacGet,
                 cmd_07_0e_password::{
@@ -1183,7 +1183,7 @@ impl<I: BleIo> Worker<I> {
             self.send(&request).await?;
             let reply = self.response(&request, JOIN_TIMEOUT).await?;
             let response =
-                reply.decode_command_reply::<JoinNetworkRequest<'static>, CameraReadReply<CameraRawData>>().map_err(|_| {
+                reply.decode_command_reply::<JoinNetworkRequest<'static>, CameraReadReply<RemainingBytes>>().map_err(|_| {
                     Error::InvalidReply {
                         command: reply.command,
                         reason: "missing status byte",
@@ -1339,9 +1339,9 @@ mod tests {
     const TEST_MTU: usize = 247;
 
     fn join_retry_reply() -> Vec<u8> {
-        encode(&CameraReadReply::<CameraRawData>::Rejected {
+        encode(&CameraReadReply::<RemainingBytes>::Rejected {
             status: JOIN_RETRY_STATUS,
-            extension: CameraRawData(vec![JOIN_RETRY_DETAIL]),
+            extension: RemainingBytes(vec![JOIN_RETRY_DETAIL]),
         })
         .unwrap()
     }
@@ -1357,7 +1357,7 @@ mod tests {
                     crate::protocol::CommandPacket::payload(&ActivationStatusNotification {
                         unknown: [0xa5; ACTIVATION_UNKNOWN_LENGTH],
                         state: ActivationState::Unknown02,
-                        extension: CameraRawData(vec![0xab]),
+                        extension: RemainingBytes(vec![0xab]),
                     })
                     .unwrap();
                 let message = Message {
@@ -1605,12 +1605,12 @@ mod tests {
                     response.payload = if request.command == Command::Wifi(WifiCommand::Ssid) {
                         crate::protocol::CommandPacket::payload(&WifiSsidReply {
                             ssid: TEST_SSID.to_owned(),
-                            extension: CameraRawData(vec![]),
+                            extension: RemainingBytes(vec![]),
                         })?
                     } else {
                         crate::protocol::CommandPacket::payload(&WifiPasswordReply {
                             password: TEST_PASSWORD.to_owned(),
-                            extension: CameraRawData(vec![]),
+                            extension: RemainingBytes(vec![]),
                         })?
                     };
                 }

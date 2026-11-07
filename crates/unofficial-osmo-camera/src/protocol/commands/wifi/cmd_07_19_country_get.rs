@@ -4,7 +4,7 @@ use crate::{
     Error,
     protocol::{
         Query,
-        commands::reply::{CameraRawData, CommandReadReply},
+        commands::reply::{CommandReadReply, RemainingBytes},
         identity::Endpoint,
     },
 };
@@ -41,7 +41,7 @@ pub struct WifiCountryReply {
     #[bw(calc = 0u8)]
     status: u8,
     #[br(assert(matches!(raw.0.as_slice(), [_, _, 0] | [0xff, _, _, 0, ..]), Error::Protocol("invalid Wi-Fi country reply layout")))]
-    raw: CameraRawData,
+    raw: RemainingBytes,
 }
 
 impl WifiCountryReply {

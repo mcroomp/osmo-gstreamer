@@ -4,7 +4,7 @@ use crate::{
     Error,
     protocol::{
         Query,
-        commands::reply::{CameraRawData, CommandReadReply},
+        commands::reply::{CommandReadReply, RemainingBytes},
         identity::Endpoint,
     },
 };
@@ -43,7 +43,7 @@ pub struct CameraStorageLocationReply {
     #[bw(calc = 0u8)]
     status: u8,
     #[br(assert(raw.0.len() >= 6 && (1..=4).contains(&raw.0[3]) && raw.0.len() >= 5 + usize::from(raw.0[3]), Error::Protocol("invalid camera storage list")))]
-    raw: CameraRawData,
+    raw: RemainingBytes,
 }
 
 impl CameraStorageLocationReply {

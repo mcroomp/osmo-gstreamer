@@ -1,7 +1,7 @@
 //! Sensitive Wi-Fi password GET.
 
 use super::packed_string::{read_packed_string, write_packed_string};
-use crate::protocol::commands::reply::CameraRawData;
+use crate::protocol::commands::reply::RemainingBytes;
 use binrw::{BinWrite, binrw};
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 
@@ -43,7 +43,7 @@ pub struct WifiPasswordReply {
     #[br(parse_with = read_packed_string)]
     #[bw(write_with = write_packed_string)]
     pub password: String,
-    pub extension: CameraRawData,
+    pub extension: RemainingBytes,
 }
 
 impl Debug for WifiPasswordReply {

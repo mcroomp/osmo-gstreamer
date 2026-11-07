@@ -1,6 +1,6 @@
 //! Marker-qualified activation indication.
 
-use crate::protocol::commands::reply::CameraRawData;
+use crate::protocol::commands::reply::RemainingBytes;
 use binrw::{BinRead, BinWrite, binrw};
 
 /// Decode the marker-qualified activation state without interpreting unknown bytes.
@@ -29,7 +29,7 @@ pub struct ActivationStatusNotification {
     marker: [u8; 2],
     pub unknown: [u8; ACTIVATION_UNKNOWN_LENGTH],
     pub state: ActivationState,
-    pub extension: CameraRawData,
+    pub extension: RemainingBytes,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
@@ -56,7 +56,7 @@ mod tests {
         let value = ActivationStatusNotification {
             unknown: [0xa5; ACTIVATION_UNKNOWN_LENGTH],
             state: ActivationState::Other(0xff),
-            extension: CameraRawData(vec![0xde, 0xad]),
+            extension: RemainingBytes(vec![0xde, 0xad]),
         };
         let mut bytes = encode(&value).unwrap();
         assert_eq!(

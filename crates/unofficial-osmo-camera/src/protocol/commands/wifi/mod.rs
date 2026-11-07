@@ -16,7 +16,7 @@ mod tests {
     use super::*;
     use crate::protocol::{
         CommandPacket, ExplorationRequest, Flags, Message, Query,
-        commands::reply::{CameraRawData, CameraReadReply, CommandReadReply, decode_payload},
+        commands::reply::{CameraReadReply, CommandReadReply, RemainingBytes, decode_payload},
         decode, encode,
         identity::{Command, Endpoint, WifiCommand},
     };
@@ -197,9 +197,9 @@ mod tests {
             encode(&cmd_07_45_pair::BlePairingArmRequest).unwrap(),
             [1, 0]
         );
-        let retry = CameraReadReply::<CameraRawData>::Rejected {
+        let retry = CameraReadReply::<RemainingBytes>::Rejected {
             status: cmd_07_47_join_network::JOIN_RETRY_STATUS,
-            extension: CameraRawData(vec![cmd_07_47_join_network::JOIN_RETRY_DETAIL]),
+            extension: RemainingBytes(vec![cmd_07_47_join_network::JOIN_RETRY_DETAIL]),
         };
         assert_eq!(encode(&retry).unwrap(), [1, 0xff]);
     }

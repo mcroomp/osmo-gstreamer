@@ -2,7 +2,7 @@
 
 use crate::protocol::{
     Query,
-    commands::reply::{CameraRawData, CommandReadReply},
+    commands::reply::{CommandReadReply, RemainingBytes},
     identity::Endpoint,
 };
 use binrw::{BinWrite, binrw};
@@ -69,7 +69,7 @@ pub struct CameraUserShutterReply {
     pub unmapped_prefix: u8,
     pub encoded_speed: u16,
     pub decimal_digit: u8,
-    pub extension: CameraRawData,
+    pub extension: RemainingBytes,
 }
 
 impl CameraUserShutterReply {

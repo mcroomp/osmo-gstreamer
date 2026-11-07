@@ -4,7 +4,7 @@ use crate::{
     Error,
     protocol::{
         Query,
-        commands::reply::{CameraRawData, CommandReadReply},
+        commands::reply::{CommandReadReply, RemainingBytes},
         identity::Endpoint,
         u16_at,
     },
@@ -52,7 +52,7 @@ pub struct CameraWatermarkReply {
     status: u8,
     #[br(assert(raw.0.len() >= WATERMARK_HEADER_LENGTH, Error::Protocol("truncated watermark metadata header")))]
     #[br(assert(raw.0.len() >= WATERMARK_HEADER_LENGTH + usize::from(u16_at(&raw.0, 2)), Error::Protocol("truncated watermark metadata value")))]
-    raw: CameraRawData,
+    raw: RemainingBytes,
 }
 
 impl CameraWatermarkReply {

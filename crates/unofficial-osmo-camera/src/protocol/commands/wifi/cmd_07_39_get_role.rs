@@ -2,7 +2,7 @@
 
 use crate::protocol::{
     Query,
-    commands::reply::{CameraRawData, CameraReadReply},
+    commands::reply::{CameraReadReply, RemainingBytes},
     identity::Endpoint,
 };
 use binrw::{BinRead, BinWrite, binwrite};
@@ -31,7 +31,7 @@ pub struct WifiRoleGet {
 #[derive(Clone, Debug, PartialEq, Eq, BinRead, BinWrite)]
 #[brw(magic = b"\x07\x39")]
 pub struct WifiRoleReply {
-    pub result: CameraReadReply<CameraRawData>,
+    pub result: CameraReadReply<RemainingBytes>,
 }
 
 impl Query for WifiRoleGet {

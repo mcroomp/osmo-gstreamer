@@ -23,7 +23,7 @@ use std::fmt::{Debug, Formatter, Result as FmtResult};
 /// password or 8..=63 encoded password bytes. Limits count bytes, not characters.
 /// Length prefixes do not include a terminating NUL.
 ///
-/// Replies reuse `CameraReadReply<CameraRawData>`. A nonempty all-zero body
+/// Replies reuse `CameraReadReply<RemainingBytes>`. A nonempty all-zero body
 /// indicates acceptance; status 0x01 followed by 0xFF qualifies a temporary
 /// refusal. Status-zero replies with nonzero trailing bytes are not accepted
 /// by the lifecycle. Other detail bytes remain uninterpreted. Acceptance is

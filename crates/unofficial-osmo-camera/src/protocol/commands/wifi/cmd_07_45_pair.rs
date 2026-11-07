@@ -1,7 +1,7 @@
 //! Application pairing and raw BLE pairing-arm body.
 
 use super::packed_string::write_packed_string;
-use crate::{Error, protocol::commands::reply::CameraRawData};
+use crate::{Error, protocol::commands::reply::RemainingBytes};
 use binrw::{BinRead, BinWrite, binwrite};
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 
@@ -72,7 +72,7 @@ impl Debug for PairingRequest<'_> {
 #[derive(Clone, Debug, PartialEq, Eq, BinRead, BinWrite)]
 pub struct PairingResponse {
     pub state: PairingState,
-    pub extension: CameraRawData,
+    pub extension: RemainingBytes,
 }
 
 /// Arm pairing using the raw BLE characteristic, not a DUML command.

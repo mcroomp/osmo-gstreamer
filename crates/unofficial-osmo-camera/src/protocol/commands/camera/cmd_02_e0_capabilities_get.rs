@@ -8,7 +8,7 @@ use crate::{
     Error,
     protocol::{
         Query, ResponseStatus,
-        commands::reply::{CameraRawData, CameraReadReply, CommandReadReply},
+        commands::reply::{CameraReadReply, CommandReadReply, RemainingBytes},
         identity::Endpoint,
     },
 };
@@ -59,7 +59,7 @@ pub struct EiRangeReply {
     #[bw(calc = 0u8)]
     status: u8,
     #[br(assert(!raw.0.is_empty(), "accepted EI range has no data"))]
-    raw: CameraRawData,
+    raw: RemainingBytes,
 }
 
 impl EiRangeReply {
@@ -77,7 +77,7 @@ pub struct RecommendedEiReply {
     #[bw(calc = 0u8)]
     status: u8,
     #[br(assert(!raw.0.is_empty(), "accepted recommended EI has no data"))]
-    raw: CameraRawData,
+    raw: RemainingBytes,
 }
 
 impl RecommendedEiReply {
@@ -95,7 +95,7 @@ pub struct LensInformationReply {
     #[bw(calc = 0u8)]
     status: u8,
     #[br(assert(!raw.0.is_empty(), "accepted lens information has no data"))]
-    raw: CameraRawData,
+    raw: RemainingBytes,
 }
 
 impl LensInformationReply {
@@ -161,7 +161,7 @@ pub enum AccessoriesData {
         #[bw(assert(*status != ResponseStatus::Success, Error::Protocol("rejected capability cannot have success status")))]
         status: ResponseStatus,
         #[brw(magic = 4u8)]
-        extension: CameraRawData,
+        extension: RemainingBytes,
     },
 }
 
@@ -173,7 +173,7 @@ pub enum AccessoriesData {
 pub struct AccessoryCapabilityResponse {
     pub unmapped_byte: u8,
     pub raw_flags: u8,
-    pub extension: CameraRawData,
+    pub extension: RemainingBytes,
 }
 
 impl AccessoryCapabilityResponse {
@@ -215,7 +215,7 @@ mod tests {
         }
         let invalid = AccessoriesData::Rejected {
             status: ResponseStatus::Success,
-            extension: CameraRawData(vec![0xaa]),
+            extension: RemainingBytes(vec![0xaa]),
         };
         assert!(encode(&invalid).is_err());
         assert!(
@@ -236,7 +236,7 @@ mod tests {
             reply,
             CameraReadReply::Rejected {
                 status: ResponseStatus::Unknown(0xe0),
-                extension: CameraRawData(vec![2, 0, 3]),
+                extension: RemainingBytes(vec![2, 0, 3]),
             }
         );
         assert_eq!(encode(&reply).unwrap(), [0xe0, 2, 0, 3]);
@@ -249,7 +249,7 @@ mod tests {
             reply,
             CameraReadReply::Accepted(AccessoriesData::Rejected {
                 status: ResponseStatus::Unknown(0xe0),
-                extension: CameraRawData(vec![0xaa]),
+                extension: RemainingBytes(vec![0xaa]),
             })
         );
         for bytes in [[0, 1, 0xe0, 4], [0, 2, 0xe0, 3], [0, 2, 0xe0, 5]] {

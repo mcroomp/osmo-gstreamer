@@ -3,7 +3,7 @@
 use super::packed_string::{read_packed_string, write_packed_string};
 use crate::protocol::{
     Query,
-    commands::reply::{CameraRawData, CommandReadReply},
+    commands::reply::{CommandReadReply, RemainingBytes},
     identity::Endpoint,
 };
 use binrw::{BinWrite, binrw};
@@ -52,7 +52,7 @@ pub struct WifiSsidReply {
     #[br(parse_with = read_packed_string)]
     #[bw(write_with = write_packed_string)]
     pub ssid: String,
-    pub extension: CameraRawData,
+    pub extension: RemainingBytes,
 }
 
 impl Debug for WifiSsidReply {

@@ -4,7 +4,7 @@ use crate::{
     Error,
     protocol::{
         Query,
-        commands::reply::{CameraRawData, CommandReadReply},
+        commands::reply::{CommandReadReply, RemainingBytes},
         identity::Endpoint,
     },
 };
@@ -40,7 +40,7 @@ pub struct CameraLanguageReply {
     #[bw(calc = 0u8)]
     status: u8,
     #[br(assert(!raw.0.is_empty(), Error::Protocol("truncated CameraLanguageReply")))]
-    raw: CameraRawData,
+    raw: RemainingBytes,
 }
 
 impl CameraLanguageReply {

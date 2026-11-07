@@ -4,7 +4,7 @@ use crate::{
     Error,
     protocol::{
         Query,
-        commands::reply::{CameraRawData, CommandReadReply},
+        commands::reply::{CommandReadReply, RemainingBytes},
         identity::Endpoint,
     },
 };
@@ -61,7 +61,7 @@ pub struct CameraAudioReply {
     #[bw(calc = 0u8)]
     status: u8,
     #[br(assert(raw.0.len() >= AUDIO_PREFIX_LENGTH, Error::Protocol("truncated CameraAudioReply")))]
-    raw: CameraRawData,
+    raw: RemainingBytes,
 }
 
 impl CameraAudioReply {

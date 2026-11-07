@@ -80,7 +80,7 @@ mod tests {
                 },
                 cmd_02_e1_broadcast_mode::EnterBroadcastMode,
             },
-            reply::CameraRawData,
+            reply::RemainingBytes,
             wifi::{
                 cmd_07_0e_password::WifiPasswordGet,
                 cmd_07_39_get_role::WifiRole,
@@ -227,7 +227,7 @@ mod tests {
         check(
             CameraStateNotification {
                 state: 0x4000_0000,
-                extension: CameraRawData(vec![0xa5]),
+                extension: RemainingBytes(vec![0xa5]),
             },
             [2, 0x80],
             &[0, 0, 0, 0x40, 0xa5],
@@ -235,7 +235,7 @@ mod tests {
         check(
             PairingApprovalNotification {
                 approval: PairingApproval::Unknown(5),
-                extension: CameraRawData(vec![0xab]),
+                extension: RemainingBytes(vec![0xab]),
             },
             [7, 0x46],
             &[5, 0xab],
@@ -246,7 +246,7 @@ mod tests {
     fn notification_decoding_cannot_accept_another_command_with_the_same_payload() {
         let packet = PairingApprovalNotification {
             approval: PairingApproval::Accepted01,
-            extension: CameraRawData(vec![]),
+            extension: RemainingBytes(vec![]),
         };
         let mut message = packet
             .frame(MessageContext {

@@ -143,7 +143,7 @@ declare the same two-byte command-only magic; `Query` checks their agreement
 and decodes the complete reply without adding another prefix. Header metadata
 remains separate in `MessageContext`, and status is an ordinary reply field,
 not magic. Command-specific accepted fields live directly in `…Reply` structs,
-without redundant `…Data` holders. `CommandReadReply<T, R = CameraRawData>` wraps
+without redundant `…Data` holders. `CommandReadReply<T, R = RemainingBytes>` wraps
 them in `Accepted(T)` or `Rejected { status, extension }`: rejections preserve
 opaque bytes by default, with a custom rejection type only for a useful,
 established layout. Genuinely reused parameter, accessory and media data types

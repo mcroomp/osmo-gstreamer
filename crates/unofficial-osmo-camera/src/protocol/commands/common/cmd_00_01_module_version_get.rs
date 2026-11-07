@@ -4,7 +4,7 @@ use crate::{
     Error,
     protocol::{
         Query,
-        commands::reply::{CameraRawData, CommandReadReply},
+        commands::reply::{CommandReadReply, RemainingBytes},
         identity::Endpoint,
     },
 };
@@ -70,7 +70,7 @@ pub struct CameraModuleVersionReply {
     product_label: [u8; 16],
     unknown: [u8; 4],
     version: [u8; 4],
-    extension: CameraRawData,
+    extension: RemainingBytes,
 }
 
 impl CameraModuleVersionReply {
