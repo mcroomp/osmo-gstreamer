@@ -70,6 +70,17 @@ provenance or safety requirements. Use [README.md](README.md) for build commands
 
 ## Tooling, validation and release
 
+- In every Rust file, place module documentation first, then a consolidated
+  block of `use` statements, then item documentation and declarations. Use
+  imports instead of fully qualified names in declarations, attributes and
+  executable code; use import aliases to resolve naming collisions. Let rustfmt
+  standardize import layout. Keep conditional imports with their `cfg`
+  attributes. Each test block and nested module must likewise have one
+  consolidated import block at its beginning, before helpers and tests; do not
+  scatter imports through the block or place them inside individual tests.
+  Command modules put the documented main command struct immediately after
+  the imports, before supporting types and constants.
+
 - Prefer Bash shell scripts and CI steps. Use PowerShell only for operations
   that require Windows-specific tooling.
 

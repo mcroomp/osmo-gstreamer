@@ -13,11 +13,15 @@ mod tests {
         cmd_02_8e_streaming_control::*, cmd_02_e1_broadcast_mode::EnterBroadcastMode,
         cmd_08_78_streaming_settings::*,
     };
-    use crate::protocol::{
-        Flags, Message, Query,
-        identity::{Command, Endpoint},
+    use crate::{
+        Error,
+        protocol::{
+            CommandPacket, Flags, Message, Query, decode, encode,
+            identity::{Command, Endpoint},
+        },
     };
-    use crate::protocol::{decode, encode};
+    use binrw::{BinRead, BinWrite, Endian};
+    use std::io::Cursor;
 
     fn profile() -> MediaStreamingProfile {
         MediaStreamingProfile {
@@ -34,17 +38,29 @@ mod tests {
 
     #[test]
     fn exact_mode_settings_start_stop_and_query_bytes() {
-        assert_eq!(encode(&EnterBroadcastMode).unwrap(), [0x1a]);
         assert_eq!(
-            encode(&MediaStreamingControl::Start).unwrap(),
+            CommandPacket::payload(&EnterBroadcastMode::default()).unwrap(),
+            [0x1a]
+        );
+        assert_eq!(
+            CommandPacket::payload(&MediaStreamingControlRequest {
+                control: MediaStreamingControl::Start
+            })
+            .unwrap(),
             [1, 1, 0x1a, 0, 1, 1, 0, 0]
         );
         assert_eq!(
-            encode(&MediaStreamingControl::StopAndQuit).unwrap(),
+            CommandPacket::payload(&MediaStreamingControlRequest {
+                control: MediaStreamingControl::StopAndQuit
+            })
+            .unwrap(),
             [1, 1, 0x1a, 0, 1, 2, 0, 0]
         );
-        assert_eq!(encode(&MediaStreamingStateGet).unwrap(), [0, 1, 0x1c, 0]);
-        let bytes = encode(&MediaStreamingSettings { profile: profile() }).unwrap();
+        assert_eq!(
+            encode(&MediaStreamingStateGet::default()).unwrap(),
+            [2, 0x8e, 0, 1, 0x1c, 0]
+        );
+        let bytes = CommandPacket::payload(&MediaStreamingSettings { profile: profile() }).unwrap();
         assert_eq!(bytes.len(), 41);
         assert_eq!(
             &bytes[..14],
@@ -57,7 +73,7 @@ mod tests {
     fn profile_lengths_are_bounded_by_bytes_and_unknown_fields_are_preserved() {
         let mut p = profile();
         p.destination.resize(MAX_DESTINATION_BYTES, b'x');
-        let bytes = encode(&MediaStreamingSettings { profile: p.clone() }).unwrap();
+        let bytes = CommandPacket::payload(&MediaStreamingSettings { profile: p.clone() }).unwrap();
         assert_eq!(&bytes[..3], [0, 255, 0]);
         assert_eq!(&bytes[12..14], [244, 0]);
         p.destination.push(b'x');
@@ -77,11 +93,7 @@ mod tests {
     }
 
     #[test]
-    fn derived_profile_lengths_are_little_endian_and_failures_are_atomic() {
-        use crate::Error;
-        use binrw::{BinWrite, Endian};
-        use std::io::Cursor;
-
+    fn derived_profile_lengths_are_little_endian_and_boundary_failures_are_atomic() {
         for destination in [
             b"rtmp://x".to_vec(),
             format!("rtmps://{}", "\u{00e9}".repeat(118)).into_bytes(),
@@ -91,12 +103,12 @@ mod tests {
             let settings = MediaStreamingSettings { profile };
             let expected = encode(&settings).unwrap();
             assert_eq!(
-                usize::from(u16::from_le_bytes([expected[1], expected[2]])),
-                expected.len() - 3
+                usize::from(u16::from_le_bytes([expected[3], expected[4]])),
+                expected.len() - 5
             );
             assert_eq!(
-                usize::from(u16::from_le_bytes([expected[12], expected[13]])),
-                expected.len() - 14
+                usize::from(u16::from_le_bytes([expected[14], expected[15]])),
+                expected.len() - 16
             );
             let mut writer = Cursor::new(Vec::new());
             settings
@@ -108,7 +120,7 @@ mod tests {
         let mut profile = profile();
         profile.destination.resize(MAX_DESTINATION_BYTES + 1, b'x');
         let settings = MediaStreamingSettings { profile };
-        let mut writer = std::io::Cursor::new(Vec::new());
+        let mut writer = Cursor::new(Vec::new());
         writer.get_mut().extend_from_slice(&[0xa5]);
         assert!(matches!(
             encode(&settings).map(|bytes| writer.get_mut().extend(bytes)),
@@ -118,6 +130,11 @@ mod tests {
             })
         ));
         assert_eq!(writer.into_inner(), [0xa5]);
+        assert!(
+            settings
+                .write_options(&mut Cursor::new(Vec::new()), Endian::Big, ())
+                .is_err()
+        );
     }
 
     #[test]
@@ -133,7 +150,7 @@ mod tests {
             let mut p = profile();
             p.destination = bytes.to_vec();
             assert!(encode(&p).is_err());
-            assert!(encode(&MediaStreamingSettings { profile: p }).is_err());
+            assert!(CommandPacket::payload(&MediaStreamingSettings { profile: p }).is_err());
         }
     }
 
@@ -141,28 +158,62 @@ mod tests {
     fn state_success_is_structured_and_rejections_are_not_fake_successes() {
         let bytes = [0, 0, 1, 0x1c, 0, 9, 1, 2, 3, 4, 5, 6, 7, 8, 9];
         assert_eq!(
-            decode::<MediaStreamingStateReply>(&bytes, ()).unwrap(),
-            MediaStreamingStateReply::State([1, 2, 3, 4, 5, 6, 7, 8, 9])
+            decode::<MediaStreamingStateData>(&bytes, ()).unwrap(),
+            MediaStreamingStateData::State([1, 2, 3, 4, 5, 6, 7, 8, 9])
         );
         for end in 0..bytes.len() {
-            assert!(decode::<MediaStreamingStateReply>(&bytes[..end], ()).is_err());
+            assert!(decode::<MediaStreamingStateData>(&bytes[..end], ()).is_err());
         }
         for index in 2..6 {
             let mut invalid = bytes;
             invalid[index] ^= 0x40;
-            assert!(decode::<MediaStreamingStateReply>(&invalid, ()).is_err());
+            assert!(decode::<MediaStreamingStateData>(&invalid, ()).is_err());
         }
         let mut trailing = bytes.to_vec();
         trailing.push(0);
-        assert!(decode::<MediaStreamingStateReply>(&trailing, ()).is_err());
+        assert!(decode::<MediaStreamingStateData>(&trailing, ()).is_err());
         assert_eq!(
-            decode::<MediaStreamingStateReply>(&[0xd6], ()).unwrap(),
-            MediaStreamingStateReply::Rejected(vec![0xd6])
+            decode::<MediaStreamingStateData>(&[0xd6], ()).unwrap(),
+            MediaStreamingStateData::Rejected(vec![0xd6])
         );
         assert_eq!(
-            decode::<MediaStreamingStateReply>(&[0, 1], ()).unwrap(),
-            MediaStreamingStateReply::Rejected(vec![0, 1])
+            decode::<MediaStreamingStateData>(&[0, 1], ()).unwrap(),
+            MediaStreamingStateData::Rejected(vec![0, 1])
         );
+    }
+
+    #[test]
+    fn state_native_codecs_preserve_bytes_at_nonzero_offsets() {
+        for bytes in [
+            vec![0, 0, 1, 0x1c, 0, 9, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+            vec![0xd6, 0xaa, 0xbb],
+            vec![0, 1, 0xaa],
+        ] {
+            let mut framed = vec![0xa5; 3];
+            framed.extend_from_slice(&bytes);
+            let mut reader = Cursor::new(&framed);
+            reader.set_position(3);
+            let state =
+                MediaStreamingStateData::read_options(&mut reader, Endian::Big, ()).unwrap();
+            assert_eq!(reader.position(), framed.len() as u64);
+            let mut writer = Cursor::new(vec![0xa5; 3]);
+            writer.set_position(3);
+            state.write_options(&mut writer, Endian::Big, ()).unwrap();
+            assert_eq!(writer.into_inner(), framed);
+        }
+        for bytes in [vec![], vec![0], vec![0, 0], vec![0, 0, 1, 0x1c, 0, 9]] {
+            let rejected = MediaStreamingStateData::Rejected(bytes);
+            assert!(encode(&rejected).is_err());
+            assert!(
+                rejected
+                    .write_options(&mut Cursor::new(Vec::new()), Endian::Big, ())
+                    .is_err()
+            );
+        }
+        assert!(matches!(
+            decode::<MediaStreamingStateData>(&[0, 0], ()),
+            Err(Error::WireCodec { .. })
+        ));
     }
 
     #[test]
@@ -170,15 +221,18 @@ mod tests {
         for (command, payload) in [
             (
                 super::cmd_02_e1_broadcast_mode::COMMAND,
-                encode(&EnterBroadcastMode).unwrap(),
+                CommandPacket::payload(&EnterBroadcastMode::default()).unwrap(),
             ),
             (
                 super::cmd_08_78_streaming_settings::COMMAND,
-                encode(&MediaStreamingSettings { profile: profile() }).unwrap(),
+                CommandPacket::payload(&MediaStreamingSettings { profile: profile() }).unwrap(),
             ),
             (
                 super::cmd_02_8e_streaming_control::COMMAND,
-                encode(&MediaStreamingControl::Start).unwrap(),
+                CommandPacket::payload(&MediaStreamingControlRequest {
+                    control: MediaStreamingControl::Start,
+                })
+                .unwrap(),
             ),
         ] {
             let sent = Message::request(Endpoint::Media, 123, command, &payload);
@@ -201,9 +255,12 @@ mod tests {
             reply.sender = Endpoint::Camera;
             assert!(!reply.is_reply_to(&sent));
         }
-        assert_eq!(MediaStreamingStateGet.receiver(), Endpoint::Media);
         assert_eq!(
-            MediaStreamingStateGet.command(),
+            MediaStreamingStateGet::default().receiver(),
+            Endpoint::Media
+        );
+        assert_eq!(
+            MediaStreamingStateGet::default().command(),
             Command::from_wire(2, 0x8e)
         );
     }

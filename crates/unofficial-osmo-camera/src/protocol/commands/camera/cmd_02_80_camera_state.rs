@@ -1,12 +1,39 @@
 //! Camera state notification prefix.
-use crate::protocol::decode;
-use binrw::{BinRead, BinWrite};
 
-use crate::protocol::commands::reply::CameraRawData;
+use crate::protocol::{commands::reply::RemainingBytes, decode};
+use binrw::{BinRead, BinWrite};
+use std::mem::size_of;
+
+/// Read the known camera state word, retaining all other telemetry as opaque bytes.
+///
+/// Camera -> APP | 0x02/0x80 | Notification
+///
+/// ```text
+/// notification {
+///     state: le_u32 | bit 30 playback; bits 6-7 raw recording code
+///     extension: [u8; remaining] | opaque
+/// }
+/// ```
+///
+/// At least four bytes are required by this prefix decoder. The full Nano
+/// layout is 60 bytes, with no leading command-status byte. It includes mode
+/// at offset 4, storage bytes at 5..=20, an opaque LE16 at 29, packed bytes at
+/// 32/33, eight opaque bytes at 49..=56 and a raw mode code at 57.
+/// State bit 30 can be set for content-mode code 2 or 7; code 7 remains
+/// unknown to the legacy content-mode enum and must not be discarded.
+/// Counters, elapsed-time units and capture-mode meanings remain unspecified.
+/// No query or notification reply is defined.
+#[derive(Clone, Debug, PartialEq, Eq, BinRead, BinWrite)]
+#[brw(little)]
+#[brw(magic = b"\x02\x80")]
+pub struct CameraStateNotification {
+    pub state: u32,
+    pub extension: RemainingBytes,
+}
 
 pub const PLAYBACK_STATE_MASK: u32 = 0x4000_0000;
 pub const RECORDING_PHASE_MASK: u32 = 0x0000_00c0;
-pub const CAMERA_STATE_PREFIX_LENGTH: usize = std::mem::size_of::<u32>();
+pub const CAMERA_STATE_PREFIX_LENGTH: usize = size_of::<u32>();
 pub const CAMERA_CONTENT_MODE_OFFSET: usize = 4;
 pub const CAMERA_CAPTURE_MODE_OFFSET: usize = 57;
 pub const CAMERA_FULL_STATUS_MIN_LENGTH: usize = CAMERA_CAPTURE_MODE_OFFSET + 1;
@@ -72,32 +99,6 @@ pub enum NanoCaptureMode {
     Unknown(u8),
 }
 
-/// Read the known camera state word, retaining all other telemetry as opaque bytes.
-///
-/// Camera -> APP | 0x02/0x80 | Notification
-///
-/// ```text
-/// notification {
-///     state: le_u32 | bit 30 playback; bits 6-7 raw recording code
-///     extension: [u8; remaining] | opaque
-/// }
-/// ```
-///
-/// At least four bytes are required by this prefix decoder. The full Nano
-/// layout is 60 bytes, with no leading command-status byte. It includes mode
-/// at offset 4, storage bytes at 5..=20, an opaque LE16 at 29, packed bytes at
-/// 32/33, eight opaque bytes at 49..=56 and a raw mode code at 57.
-/// State bit 30 can be set for content-mode code 2 or 7; code 7 remains
-/// unknown to the legacy content-mode enum and must not be discarded.
-/// Counters, elapsed-time units and capture-mode meanings remain unspecified.
-/// No query or notification reply is defined.
-#[derive(Clone, Debug, PartialEq, Eq, BinRead, BinWrite)]
-#[brw(little)]
-pub struct CameraStateNotification {
-    pub state: u32,
-    pub extension: CameraRawData,
-}
-
 impl CameraStateNotification {
     pub fn playback_mode_active(&self) -> bool {
         self.state & PLAYBACK_STATE_MASK != 0
@@ -115,7 +116,7 @@ impl CameraStateNotification {
     /// Apply compatibility labels when payload offset 4 is present.
     pub fn content_mode(&self) -> Option<CameraContentMode> {
         self.extension
-            .0
+            .as_slice()
             .get(CAMERA_CONTENT_MODE_EXTENSION_OFFSET)
             .copied()
             .map(CameraContentMode::from)
@@ -124,7 +125,7 @@ impl CameraStateNotification {
     /// Return the model-qualified capture-mode code when payload offset 57 is present.
     pub fn nano_capture_mode(&self) -> Option<NanoCaptureMode> {
         self.extension
-            .0
+            .as_slice()
             .get(CAMERA_CAPTURE_MODE_EXTENSION_OFFSET)
             .copied()
             .map(|code| {
@@ -137,21 +138,31 @@ impl CameraStateNotification {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{decode, encode};
+    use crate::{
+        Result,
+        protocol::{
+            CommandPacket, Message,
+            identity::{Command, Endpoint},
+        },
+    };
+
+    fn decode_state(payload: &[u8]) -> Result<CameraStateNotification> {
+        Message::request(Endpoint::App, 1, Command::from_wire(2, 0x80), payload).decode_command()
+    }
 
     #[test]
     fn state_prefix_retains_unknown_bits_and_tail() {
         let bytes = [0x21, 0x43, 0x65, 0xc0, 0xde, 0xad];
-        let value = decode::<CameraStateNotification>(&bytes, ()).unwrap();
+        let value = decode_state(&bytes).unwrap();
         assert!(value.playback_mode_active());
-        assert_eq!(encode(&value).unwrap(), bytes);
-        assert_eq!(value.extension.0, [0xde, 0xad]);
+        assert_eq!(CommandPacket::payload(&value).unwrap(), bytes);
+        assert_eq!(value.extension.as_slice(), [0xde, 0xad]);
         for length in 0..CAMERA_STATE_PREFIX_LENGTH {
-            assert!(decode::<CameraStateNotification>(&bytes[..length], ()).is_err());
+            assert!(decode_state(&bytes[..length]).is_err());
         }
         let value = CameraStateNotification {
             state: !PLAYBACK_STATE_MASK,
-            extension: CameraRawData(vec![]),
+            extension: RemainingBytes::<0>::new(vec![]).unwrap(),
         };
         assert!(!value.playback_mode_active());
     }
@@ -162,13 +173,13 @@ mod tests {
         bytes[0] = 0x80;
         bytes[CAMERA_CONTENT_MODE_OFFSET] = 1;
         bytes[CAMERA_CAPTURE_MODE_OFFSET] = 0x28;
-        let value = decode::<CameraStateNotification>(&bytes, ()).unwrap();
+        let value = decode_state(&bytes).unwrap();
         assert_eq!(value.recording_phase(), CameraRecordingPhase::Recording);
         assert_eq!(value.content_mode(), Some(CameraContentMode::Video));
         assert_eq!(value.nano_capture_mode(), Some(NanoCaptureMode::SuperNight));
-        assert_eq!(encode(&value).unwrap(), bytes);
+        assert_eq!(CommandPacket::payload(&value).unwrap(), bytes);
 
-        let short = decode::<CameraStateNotification>(&[0x40, 0, 0, 0, 0], ()).unwrap();
+        let short = decode_state(&[0x40, 0, 0, 0, 0]).unwrap();
         assert_eq!(short.recording_phase(), CameraRecordingPhase::Starting);
         assert_eq!(
             short.content_mode(),
@@ -180,14 +191,14 @@ mod tests {
         unknown[0] = 0xc0;
         unknown[CAMERA_CONTENT_MODE_OFFSET] = 0xff;
         unknown[CAMERA_CAPTURE_MODE_OFFSET] = 0xfe;
-        let value = decode::<CameraStateNotification>(&unknown, ()).unwrap();
+        let value = decode_state(&unknown).unwrap();
         assert_eq!(value.recording_phase(), CameraRecordingPhase::Finalizing);
         assert_eq!(value.content_mode(), Some(CameraContentMode::Unknown(0xff)));
         assert_eq!(
             value.nano_capture_mode(),
             Some(NanoCaptureMode::Unknown(0xfe))
         );
-        assert_eq!(encode(&value).unwrap(), unknown);
+        assert_eq!(CommandPacket::payload(&value).unwrap(), unknown);
     }
 
     #[test]
@@ -195,9 +206,9 @@ mod tests {
         let mut bytes = vec![0; 60];
         bytes[..4].copy_from_slice(&PLAYBACK_STATE_MASK.to_le_bytes());
         bytes[CAMERA_CONTENT_MODE_OFFSET] = 7;
-        let value = decode::<CameraStateNotification>(&bytes, ()).unwrap();
+        let value = decode_state(&bytes).unwrap();
         assert!(value.playback_mode_active());
         assert_eq!(value.content_mode(), Some(CameraContentMode::Unknown(7)));
-        assert_eq!(encode(&value).unwrap(), bytes);
+        assert_eq!(CommandPacket::payload(&value).unwrap(), bytes);
     }
 }

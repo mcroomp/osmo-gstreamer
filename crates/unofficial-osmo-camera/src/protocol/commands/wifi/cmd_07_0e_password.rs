@@ -1,11 +1,9 @@
 //! Sensitive Wi-Fi password GET.
 
 use super::packed_string::{read_packed_string, write_packed_string};
-use crate::protocol::commands::reply::CameraRawData;
-use binrw::{BinRead, BinWrite};
-
-pub const MIN_PASSWORD_LENGTH: usize = 8;
-pub const MAX_PASSWORD_BYTES: usize = 63;
+use crate::protocol::commands::reply::RemainingBytes;
+use binrw::{BinWrite, binrw};
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 
 /// Read hotspot credentials only within an explicitly requested credential lifecycle.
 ///
@@ -20,28 +18,36 @@ pub const MAX_PASSWORD_BYTES: usize = 63;
 ///
 /// This is not a general read-only `Query`; the central credential policy applies.
 #[derive(Clone, Copy, Debug, BinWrite)]
-#[bw(map = |_: &Self| ())]
-pub struct WifiPasswordRequest;
+#[bw(magic = b"\x07\x0e")]
+pub struct WifiPasswordGet;
 
-/// Accepted password body inside `CameraReadReply<WifiPasswordResponse>`.
+pub const MIN_PASSWORD_LENGTH: usize = 8;
+pub const MAX_PASSWORD_BYTES: usize = 63;
+
+/// Accepted password body inside `CameraReadReply<WifiPasswordReply>`.
 ///
 /// Wifi -> APP | 0x07/0x0E | Password reply
 ///
 /// ```text
-/// reply { status: u8 | handled by CameraReadReply
+/// reply { status: u8 | handled by CommandReadReply
 ///         length: u8, password: [u8; length] | UTF-8, sensitive
 ///         extension: [u8; remaining] | opaque }
 /// ```
-#[derive(Clone, PartialEq, Eq, BinRead, BinWrite)]
-pub struct WifiPasswordResponse {
+#[binrw]
+#[derive(Clone, PartialEq, Eq)]
+#[brw(magic = b"\x07\x0e")]
+pub struct WifiPasswordReply {
+    #[br(temp, assert(status == 0, "accepted reply requires success status"))]
+    #[bw(calc = 0u8)]
+    status: u8,
     #[br(parse_with = read_packed_string)]
     #[bw(write_with = write_packed_string)]
     pub password: String,
-    pub extension: CameraRawData,
+    pub extension: RemainingBytes,
 }
 
-impl std::fmt::Debug for WifiPasswordResponse {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("WifiPasswordResponse { password: [REDACTED], extension: [OPAQUE] }")
+impl Debug for WifiPasswordReply {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        f.write_str("WifiPasswordReply { password: [REDACTED], extension: [OPAQUE] }")
     }
 }

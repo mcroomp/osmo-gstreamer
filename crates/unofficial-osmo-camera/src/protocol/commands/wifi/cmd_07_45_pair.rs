@@ -1,25 +1,9 @@
 //! Application pairing and raw BLE pairing-arm body.
 
-use crate::{Error, protocol::commands::reply::CameraRawData};
-use binrw::{BinRead, BinWrite};
-
 use super::packed_string::write_packed_string;
-
-pub const PAIRING_ID: u16 = 0x8092;
-const CLIENT_NAME: &str = "osmo";
-const MAX_PAIRING_IDENTITY_BYTES: usize = 32;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
-pub enum PairingState {
-    /// State 1, accepted by the current pairing workflow.
-    #[brw(magic = 1u8)]
-    Approved,
-    /// State 2; continue waiting rather than treating it as completion.
-    #[brw(magic = 2u8)]
-    AwaitingApproval,
-    /// Other raw states, including 5/6; never treated as approval.
-    Unknown(u8),
-}
+use crate::{Error, protocol::commands::reply::RemainingBytes};
+use binrw::{BinRead, BinWrite, binwrite};
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 
 /// Pair the application identity with the camera.
 ///
@@ -39,19 +23,38 @@ pub enum PairingState {
 /// Nano pairing limits the identity to 32 encoded bytes; the client name is
 /// the library's fixed `osmo` label, not a requirement inferred for all peers.
 /// A state reply is distinct from a later decision notification or its receipt.
-#[binrw::binwrite]
+#[binwrite]
 #[bw(assert(identity.len() <= MAX_PAIRING_IDENTITY_BYTES, Error::InvalidConfig {
     field: "pairing identity", reason: "must not exceed 32 UTF-8 bytes",
 }))]
+#[bw(magic = b"\x07\x45")]
 pub struct PairingRequest<'a> {
     #[bw(write_with = write_packed_string)]
     pub identity: &'a str,
-    #[bw(calc = (4u8, CLIENT_NAME.as_bytes()))]
-    client_name: (u8, &'static [u8]),
+    #[bw(try_calc = u8::try_from(CLIENT_NAME.len()))]
+    client_name_length: u8,
+    #[bw(calc = CLIENT_NAME.as_bytes())]
+    client_name: &'static [u8],
 }
 
-impl std::fmt::Debug for PairingRequest<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+pub const PAIRING_ID: u16 = 0x8092;
+const CLIENT_NAME: &str = "osmo";
+const MAX_PAIRING_IDENTITY_BYTES: usize = 32;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
+pub enum PairingState {
+    /// State 1, accepted by the current pairing workflow.
+    #[brw(magic = 1u8)]
+    Approved,
+    /// State 2; continue waiting rather than treating it as completion.
+    #[brw(magic = 2u8)]
+    AwaitingApproval,
+    /// Other raw states, including 5/6; never treated as approval.
+    Unknown(u8),
+}
+
+impl Debug for PairingRequest<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.write_str("PairingRequest { identity: [REDACTED] }")
     }
 }
@@ -61,7 +64,7 @@ impl std::fmt::Debug for PairingRequest<'_> {
 /// Wifi -> APP | 0x07/0x45 | Pairing reply
 ///
 /// ```text
-/// reply { status: u8 | handled by CameraReadReply
+/// reply { status: u8 | handled by CommandReadReply
 ///         state: u8, extension: [u8; remaining] | opaque }
 /// ```
 ///
@@ -69,7 +72,7 @@ impl std::fmt::Debug for PairingRequest<'_> {
 #[derive(Clone, Debug, PartialEq, Eq, BinRead, BinWrite)]
 pub struct PairingResponse {
     pub state: PairingState,
-    pub extension: CameraRawData,
+    pub extension: RemainingBytes,
 }
 
 /// Arm pairing using the raw BLE characteristic, not a DUML command.
@@ -87,12 +90,12 @@ pub struct BlePairingArmRequest;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::encode;
+    use crate::protocol::CommandPacket;
 
     #[test]
     fn pairing_identity_limit_counts_encoded_bytes() {
         for identity in ["x".repeat(32), "\u{00e9}".repeat(16)] {
-            let bytes = encode(&PairingRequest {
+            let bytes = CommandPacket::payload(&PairingRequest {
                 identity: &identity,
             })
             .unwrap();
@@ -101,7 +104,7 @@ mod tests {
         }
         for identity in ["x".repeat(33), "\u{00e9}".repeat(17)] {
             assert!(
-                encode(&PairingRequest {
+                CommandPacket::payload(&PairingRequest {
                     identity: &identity
                 })
                 .is_err()

@@ -1,16 +1,6 @@
 //! Camera live-view enable/disable payloads.
 
-use binrw::{BinRead, BinWrite};
-
-const SOURCE_PREFIX_LENGTH: usize = 10;
-/// Live-view gate, not a camera-source or resolution identifier.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BinWrite, BinRead)]
-#[brw(repr = u8)]
-#[repr(u8)]
-pub enum LiveViewGate {
-    Enable = 0x03,
-    Disable = 0x04,
-}
+use binrw::{BinRead, BinWrite, binwrite};
 
 /// Encode the eleven-byte live-view gate variant.
 ///
@@ -23,6 +13,7 @@ pub enum LiveViewGate {
 /// Support and interaction with teardown remain model-dependent.
 /// Encoding does not authorize transmission or implement teardown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BinWrite)]
+#[bw(magic = b"\x02\x09")]
 pub struct LiveViewToggleRequest {
     #[bw(pad_before = SOURCE_PREFIX_LENGTH)]
     pub gate: LiveViewGate,
@@ -37,25 +28,41 @@ pub struct LiveViewToggleRequest {
 ///           liveview_index: u8 = 0, action: u8 = 0x03 }
 /// reply { status: u8, extension: [u8; remaining] | opaque }
 /// ```
-#[derive(Clone, Copy, Debug, BinWrite)]
-#[bw(map = |_: &Self| LiveViewToggleRequest { gate: LiveViewGate::Enable })]
-pub struct LiveViewSourceRequest;
+#[binwrite]
+#[derive(Clone, Copy, Debug, Default)]
+#[bw(magic = b"\x02\x09")]
+pub struct LiveViewSourceRequest {
+    #[bw(calc = [0u8; SOURCE_PREFIX_LENGTH])]
+    prefix: [u8; SOURCE_PREFIX_LENGTH],
+    #[bw(calc = LiveViewGate::Enable)]
+    gate: LiveViewGate,
+}
+
+const SOURCE_PREFIX_LENGTH: usize = 10;
+/// Live-view gate, not a camera-source or resolution identifier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinWrite, BinRead)]
+#[brw(repr = u8)]
+#[repr(u8)]
+pub enum LiveViewGate {
+    Enable = 0x03,
+    Disable = 0x04,
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::encode;
+    use crate::protocol::CommandPacket;
 
     #[test]
     fn subscription_index_and_actions_preserve_existing_wire_requests() {
         for (gate, action) in [(LiveViewGate::Enable, 3), (LiveViewGate::Disable, 4)] {
-            let bytes = encode(&LiveViewToggleRequest { gate }).unwrap();
+            let bytes = CommandPacket::payload(&LiveViewToggleRequest { gate }).unwrap();
             assert_eq!(&bytes[..10], &[0; 10]);
             assert_eq!(bytes.len(), 11);
             assert_eq!(bytes[10], action);
         }
         assert_eq!(
-            encode(&LiveViewSourceRequest).unwrap(),
+            CommandPacket::payload(&LiveViewSourceRequest::default()).unwrap(),
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3]
         );
     }

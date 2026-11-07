@@ -17,6 +17,7 @@ use binrw::BinWrite;
 /// of association or IP configuration. The compatibility encoder exposes only
 /// roles 0/1, not every possible device role.
 #[derive(Clone, Copy, Debug, BinWrite)]
+#[bw(magic = b"\x07\x48")]
 pub struct WifiRoleSetRequest {
     pub role: WifiRole,
 }
