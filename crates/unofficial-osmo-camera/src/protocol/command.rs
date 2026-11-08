@@ -1,6 +1,9 @@
+//! Typed command bodies and their caller-supplied framing context.
+
 use super::{CommandBody, Message, MessageContext, decode, encode, identity::Command};
 use crate::{Error, Result};
-use binrw::{BinRead, BinWrite, meta::WriteMagic};
+use binrw::{BinRead, BinWrite, binread, meta::WriteMagic};
+use std::marker::PhantomData;
 
 /// Complete DUML command bodies with command-only binrw magic.
 ///
@@ -44,13 +47,13 @@ impl<T> CommandPacket for T where
 /// A full reply body for a command, retaining the existing payload codec.
 ///
 /// Nested accepted/rejected values do not repeat the command prefix.
-#[binrw::binread]
+#[binread]
 pub struct CommandReply<C: CommandPacket, T: for<'a> BinRead<Args<'a> = ()>> {
     #[br(temp, assert(command == C::COMMAND_ID, "typed reply command mismatch"))]
     command: [u8; 2],
     pub value: T,
     #[br(ignore)]
-    marker: std::marker::PhantomData<C>,
+    marker: PhantomData<C>,
 }
 
 #[cfg(test)]

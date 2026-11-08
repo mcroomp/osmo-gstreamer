@@ -2,7 +2,7 @@ use super::*;
 use crate::protocol::{
     CommandPacket, ExplorationRequest, Flags, Message, ResponseStatus,
     capabilities::{CapabilitySelector, NANO_10_00_31_22, OperationAccess, is_known_read},
-    encode,
+    decode, encode,
     identity::{CameraCommand, Command},
 };
 use std::{array::from_fn, collections::HashSet, time::Duration};
@@ -203,7 +203,7 @@ fn single_get_rejects_a_reply_for_another_id_or_a_batch() {
     let CommandReadReply::Accepted(reply) = decode_reply(&query, &accepted).unwrap() else {
         panic!("expected accepted typed reply");
     };
-    assert_eq!(reply.value.code, 7);
+    assert_eq!(reply.value.mode, CameraStabilizationMode::Unknown07);
     for (case, bytes) in [
         ("wrong ID", vec![0, 0, 1, 6, 0, 1, 2]),
         ("wrong operation", vec![0, 1, 1, 8, 0, 1, 7]),
@@ -222,8 +222,8 @@ fn typed_get_does_not_apply_set_bounds_or_decode_rejections_as_values() {
     else {
         panic!("expected raw GET code");
     };
-    assert_eq!(reply.value.code, 255);
-    assert!(EisValue::new(reply.value.code).is_err());
+    assert_eq!(reply.value.mode, CameraStabilizationMode::Unknown(255));
+    assert!(EisValue::new(reply.value.mode).is_err());
     assert_eq!(
         encode(&Set::new(reply.value)).unwrap(),
         [2, 0x8e, 1, 1, 8, 0, 1, 255]
@@ -258,6 +258,11 @@ fn fixed_legacy_pair_requires_both_ids_in_the_declared_order() {
 fn catalogue_read_eligibility_matches_raw_read_approval_without_granting_writes() {
     let mut ids = HashSet::new();
     for entry in NANO_10_00_31_22.commands {
+        if entry.receiver != Endpoint::Camera
+            || entry.command != Command::Camera(CameraCommand::Parameters)
+        {
+            continue;
+        }
         let CapabilitySelector::Parameter(id) = entry.selector else {
             continue;
         };
@@ -292,7 +297,10 @@ fn catalogue_read_eligibility_matches_raw_read_approval_without_granting_writes(
     ));
     assert!(!is_known_parameter_read(&[0, 1, 0xff, 0xff]));
     assert!(!is_known_parameter_read(
-        &encode(&Set::new(EisValue::new(7).unwrap())).unwrap()
+        &encode(&Set::new(
+            EisValue::new(CameraStabilizationMode::Unknown07).unwrap()
+        ))
+        .unwrap()
     ));
 }
 
@@ -315,7 +323,6 @@ fn scalar_constructor_bounds_cover_every_byte_without_restricting_manual_values(
 
     check(AdvanceModeValue::new, &[0, 1, 2]);
     check(StreamQualityValue::new, &[0, 1, 2]);
-    check(EisValue::new, &[0, 1, 2, 3, 4, 5, 6, 7]);
     check(FieldOfViewValue::new, &[0, 1, 2, 3, 4, 5]);
     check(VoiceControlValue::new, &[0, 1]);
     check(VoiceLanguageValue::new, &[0, 1]);
@@ -327,19 +334,93 @@ fn scalar_constructor_bounds_cover_every_byte_without_restricting_manual_values(
     check(ShutterLimitValue::new, &[0, 1, 2, 3, 4, 5]);
     check(VideoQualityEnhancementValue::new, &[0, 1]);
     check(RecordingPlanValue::new, &[0, 1, 2]);
-    check(LiveViewEisValue::new, &[0, 1, 2, 3, 4, 5, 6, 7]);
 
     let all_codes: Vec<_> = (u8::MIN..=u8::MAX).collect();
     check(IsoLimitValue::new, &all_codes);
     check(RecordingAudioChannelValue::new, &all_codes);
     check(SelfieMirrorValue::new, &all_codes);
     check(TimelapseTrackSetValue::new, &all_codes);
-    for code in u8::MIN..=u8::MAX {
-        assert_eq!(
-            encode(&Set::new(EisValue { code })).unwrap(),
-            [2, 0x8e, 1, 1, 8, 0, 1, code],
-        );
+}
+
+#[test]
+fn stabilization_parameters_share_a_lossless_enum_and_identical_constructor_bounds() {
+    fn check<T: Parameter>(
+        new: fn(CameraStabilizationMode) -> Result<T>,
+        manual: fn(CameraStabilizationMode) -> T,
+        mode_of: fn(&T) -> CameraStabilizationMode,
+    ) {
+        let named_modes = [
+            CameraStabilizationMode::Off,
+            CameraStabilizationMode::RockSteady,
+            CameraStabilizationMode::HorizonSteady,
+            CameraStabilizationMode::RockSteadyPlus,
+            CameraStabilizationMode::HorizonBalancing,
+            CameraStabilizationMode::Unknown05,
+            CameraStabilizationMode::Unknown06,
+            CameraStabilizationMode::Unknown07,
+        ];
+        let [low, high] = T::ID.to_le_bytes();
+        let query = Get::<T>::default();
+        assert_eq!(encode(&query).unwrap(), [2, 0x8e, 0, 1, low, high]);
+        for code in u8::MIN..=u8::MAX {
+            let expected = named_modes
+                .get(usize::from(code))
+                .copied()
+                .unwrap_or(CameraStabilizationMode::Unknown(code));
+            assert_eq!(
+                decode::<CameraStabilizationMode>(&[code], ()).unwrap(),
+                expected
+            );
+            assert_eq!(encode(&expected).unwrap(), [code]);
+            for mode in [expected, CameraStabilizationMode::Unknown(code)] {
+                let constructed = new(mode);
+                assert_eq!(
+                    constructed.is_ok(),
+                    code <= 7,
+                    "ID {:04x}, code {code}",
+                    T::ID
+                );
+                if let Ok(value) = constructed {
+                    assert_eq!(mode_of(&value), mode);
+                    assert_eq!(
+                        encode(&Set::new(value)).unwrap(),
+                        [2, 0x8e, 1, 1, low, high, 1, code],
+                    );
+                }
+                let setting = Set::new(manual(mode));
+                assert_eq!(mode_of(setting.value()), mode);
+                assert_eq!(
+                    encode(&setting).unwrap(),
+                    [2, 0x8e, 1, 1, low, high, 1, code],
+                );
+            }
+            let body = [0, 0, 1, low, high, 1, code];
+            let CommandReadReply::Accepted(reply) = decode_reply(&query, &body).unwrap() else {
+                panic!("expected typed stabilization reply");
+            };
+            assert_eq!(mode_of(&reply.value), expected);
+            assert_eq!(
+                encode(&Set::new(reply.value)).unwrap(),
+                [2, 0x8e, 1, 1, low, high, 1, code],
+            );
+        }
+        for malformed in [
+            vec![0, 0, 1, low, high, 0],
+            vec![0, 0, 1, low, high, 2, 0, 0],
+            vec![0, 0, 1, low, high, 1],
+            vec![0, 0, 1, low, high, 1, 0, 0],
+        ] {
+            assert!(decode_reply(&query, &malformed).is_err());
+        }
     }
+    check(EisValue::new, |mode| EisValue { mode }, |value| value.mode);
+    check(
+        LiveViewEisValue::new,
+        |mode| LiveViewEisValue { mode },
+        |value| value.mode,
+    );
+    assert!(decode_reply(&Get::<EisValue>::default(), &[0, 0, 1, 0x3e, 0, 1, 1]).is_err());
+    assert!(decode_reply(&Get::<LiveViewEisValue>::default(), &[0, 0, 1, 8, 0, 1, 1]).is_err());
 }
 
 #[test]
@@ -362,7 +443,7 @@ fn every_profile_write_has_a_constructor_with_the_exact_single_tlv_shape() {
     let ids = [
         checked_id(AdvanceModeValue::new(2), &[2]),
         checked_id(StreamQualityValue::new(2), &[2]),
-        checked_id(EisValue::new(7), &[7]),
+        checked_id(EisValue::new(CameraStabilizationMode::Unknown07), &[7]),
         checked_id(FieldOfViewValue::new(5), &[5]),
         checked_id(VoiceControlValue::new(1), &[1]),
         checked_id(VoiceLanguageValue::new(1), &[1]),
@@ -403,13 +484,20 @@ fn every_profile_write_has_a_constructor_with_the_exact_single_tlv_shape() {
         checked_id(AutofocusStrategyValue::new(0xa5), &[1, 0xa5]),
         checked_id(Unknown003cValue::new(300), &[0x2c, 1]),
         checked_id(RecordingPlanValue::new(2), &[2]),
-        checked_id(LiveViewEisValue::new(7), &[7]),
+        checked_id(
+            LiveViewEisValue::new(CameraStabilizationMode::Unknown07),
+            &[7],
+        ),
         checked_id(CaptureAspectTypeValue::new(255), &[255, 0, 0, 0]),
     ];
     let checked: HashSet<_> = ids.into_iter().collect();
     let writes: HashSet<_> = NANO_10_00_31_22
         .commands
         .iter()
+        .filter(|entry| {
+            entry.receiver == Endpoint::Camera
+                && entry.command == Command::Camera(CameraCommand::Parameters)
+        })
         .filter_map(|entry| match entry.selector {
             CapabilitySelector::Parameter(id) if entry.access.can_write() => Some(id),
             _ => None,

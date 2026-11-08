@@ -1,7 +1,8 @@
 //! Camera command payloads.
 //!
-//! Compatibility scope is Osmo Nano. Typed encoders do not establish device
-//! support or authorize writes. Unknown codes/bits remain raw; legacy semantic
+//! Typed encoders do not establish device support or authorize writes.
+//! Compatibility scope is defined by the capability profiles.
+//! Unknown codes/bits remain raw; legacy semantic
 //! helper names are not additional guarantees about physical camera behavior.
 //! Request encodings describe bytes emitted by this library, not universal
 //! acceptance rules. Reply decoders state their own validated layouts.
@@ -9,6 +10,7 @@
 pub mod cmd_02_09_live_view_control;
 pub mod cmd_02_0c_playback;
 pub mod cmd_02_18_video_format_set;
+pub mod cmd_02_19_video_format_get;
 pub mod cmd_02_1a_live_view_quality_set;
 pub mod cmd_02_29_user_shutter_get;
 pub mod cmd_02_2b_user_iso_get;
@@ -28,6 +30,7 @@ pub mod cmd_02_a0_audio_get;
 pub mod cmd_02_da_storage_location_get;
 pub mod cmd_02_e0_capabilities_get;
 pub mod cmd_02_e5_watermark_get;
+pub mod cmd_02_ff_sensor_aspect_lock_set;
 
 #[cfg(test)]
 mod tests {

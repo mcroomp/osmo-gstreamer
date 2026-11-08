@@ -20,7 +20,7 @@ use std::fmt::{Debug, Formatter, Result as FmtResult};
 ///         state: u8, extension: [u8; remaining] | opaque }
 /// ```
 ///
-/// Nano pairing limits the identity to 32 encoded bytes; the client name is
+/// This encoder limits the identity to 32 encoded bytes; the client name is
 /// the library's fixed `osmo` label, not a requirement inferred for all peers.
 /// A state reply is distinct from a later decision notification or its receipt.
 #[binwrite]

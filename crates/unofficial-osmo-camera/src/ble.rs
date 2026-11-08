@@ -67,6 +67,7 @@ use btleplug::{
 use futures::{Stream, StreamExt};
 use std::{
     collections::VecDeque,
+    fmt::{Debug, Formatter, Result as FmtResult},
     future::Future,
     net::IpAddr,
     pin::Pin,
@@ -152,8 +153,8 @@ impl WifiNetwork {
         Ok(Self { ssid, password })
     }
 }
-impl std::fmt::Debug for WifiNetwork {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for WifiNetwork {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.write_str("WifiNetwork { credentials: [REDACTED] }")
     }
 }
@@ -162,8 +163,8 @@ pub struct HotspotCredentials {
     pub ssid: String,
     pub password: String,
 }
-impl std::fmt::Debug for HotspotCredentials {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for HotspotCredentials {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.write_str("HotspotCredentials { credentials: [REDACTED] }")
     }
 }
@@ -401,6 +402,12 @@ impl BleSession {
 
     pub fn pairing_identity(&self) -> &str {
         &self.pairing_identity
+    }
+
+    pub(crate) fn ownership_lease(&self) -> Result<Arc<CameraOwnerLease>> {
+        self.lease.clone().ok_or(Error::InvalidState(
+            "BLE ownership has already been released",
+        ))
     }
 
     pub fn query(&mut self, query: BleQuery) -> Result<Message> {
@@ -1324,10 +1331,14 @@ fn pairing_approved(message: &Message, requests: &[Message]) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::commands::wifi::{
-        cmd_07_0e_password::WifiPasswordReply, cmd_07_07_ssid::WifiSsidReply,
+    use crate::protocol::{
+        CommandPacket,
+        commands::{
+            common::cmd_00_32_activation_status::ACTIVATION_UNKNOWN_LENGTH,
+            wifi::{cmd_07_0e_password::WifiPasswordReply, cmd_07_07_ssid::WifiSsidReply},
+        },
+        encode,
     };
-    use crate::protocol::encode;
 
     const TEST_IDENTITY: &str = "0123456789abcdef0123456789abcdef";
     const SUCCESS: &[u8] = &[0];
@@ -1348,18 +1359,15 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn activation_body_dispatch_preserves_routing_and_ignores_other_layouts() {
-        use crate::protocol::commands::common::cmd_00_32_activation_status::ACTIVATION_UNKNOWN_LENGTH;
-
         let mut worker = worker(MockIo::default());
         for sender in [Endpoint::Camera, Endpoint::Session] {
             for flags in [Flags::RESPONSE, Flags::ACKNOWLEDGMENT, Flags::REQUEST] {
-                let payload =
-                    crate::protocol::CommandPacket::payload(&ActivationStatusNotification {
-                        unknown: [0xa5; ACTIVATION_UNKNOWN_LENGTH],
-                        state: ActivationState::Unknown02,
-                        extension: RemainingBytes::<0>::new(vec![0xab]).unwrap(),
-                    })
-                    .unwrap();
+                let payload = CommandPacket::payload(&ActivationStatusNotification {
+                    unknown: [0xa5; ACTIVATION_UNKNOWN_LENGTH],
+                    state: ActivationState::Unknown02,
+                    extension: RemainingBytes::<0>::new(vec![0xab]).unwrap(),
+                })
+                .unwrap();
                 let message = Message {
                     sender,
                     receiver: Endpoint::App,

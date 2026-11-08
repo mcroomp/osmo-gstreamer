@@ -1,7 +1,11 @@
 # osmo-gstreamer for DJI Osmo Nano
 
 Rust-first unofficial Osmo Nano integration, with a Python testing wrapper
-and a native GStreamer plugin. Licensed under [MIT](LICENSE).
+and a native GStreamer plugin. Licensed under [MIT](LICENSE). Some protocol
+information draws on the independently published documentation from
+[luisreysan/osmocam](https://github.com/luisreysan/osmocam), credited in the
+[protocol notes](PROTOCOL.md#recording-formats-and-live-preview-capabilities)
+with source revisions and compatibility limitations.
 
 ## Unofficial interoperability project
 
@@ -27,7 +31,8 @@ These safeguards do not constitute legal advice or guarantee legal clearance.
 
 The Rust library supports LAN preview and optional BLE setup for Osmo Nano.
 The GStreamer element is `osmosrc`; the Python testing wrapper imports as
-`osmo_camera` and currently exposes only `version()`.
+`osmo_camera` and exposes native control sessions, raw and typed protocol
+bindings, and an evidence-aware capability view.
 
 Camera operations require explicit authorization. Plugin inspection does not
 connect to hardware, and failures never trigger automatic reconnection.
@@ -50,286 +55,19 @@ cargo clippy --locked -p unofficial-osmo-camera --all-targets -- -D warnings
 The default workspace member is the base library, so these tests do not need
 GStreamer installed.
 
-Model and firmware coverage lives separately from command codecs in
-`protocol::capabilities`. `NANO_10_00_31_22` includes 37 non-placeholder camera
-parameter IDs (29 GET and 33 SET cases), plus 20 exact read contracts across
-camera, Wi-Fi, common and media commands. Parameter entries retain the targeted
-profile evidence; other entries are explicitly compatibility contracts, not
-verified firmware availability. `lookup(endpoint, command, selector)` returns
-operation coverage and evidence. `require_query::<Get<T>>()` rejects
-legacy-only and write-only parameter reads for this profile. Generic
-`Get<T>` and `Set<T>` use the same `Parameter` bounds without enforcing operation
-support. Existing legacy
-names remain compatibility APIs, not evidence of Nano support. Value
-meanings, safe SET payloads and current-state availability remain separate
-questions; no new automatic requests or writes are introduced.
+### Protocol notes
 
-Each parameter has one payload struct shared by GET and SET, such as
-`EisValue` or `RotationStateValue`. `Get<T>` fixes the requested ID and response
-type; `Set<T>` privately holds the supplied payload of the same type. There is no
-large parameter-value enum, optional selector/value union, or separate SET
-payload type. Callers are responsible for selecting supported operations and may
-implement the parameter traits for custom payloads; this does not grant hardware
-authorization or extend the raw-read allowlist. Callers may define independent
-`CameraCapabilities` tables for other model/firmware scopes; missing entries
-remain unknown and never inherit Nano support. Profile selection is explicit,
-not automatic device detection or a persisted credential-profile setting.
+Detailed wire contracts and compatibility evidence live in [PROTOCOL.md](PROTOCOL.md):
 
-GET replies are `CommandReadReply<ParameterReply<T>>`: accepted replies expose
-`value: T`; rejected replies retain status and opaque extensions. The accepted
-envelope requires operation 0, count 1, the type's echoed ID and its established
-payload layout. Unknown codes remain raw, but unexpected widths/layouts now
-return errors instead of silently falling back to an untyped value.
-Raw exploration remains explicit and approval-gated; it is not a typed fallback.
-The fixed legacy two-ID request is `AdvancedLiveReversalGet`, with an
-`AdvancedLiveReversalReply` response containing `advanced_mode` and opaque
-`legacy_value` fields. No runtime-selected batch API is exposed.
-Each parameter value struct owns its complete TLV, with the parameter ID declared as
-binrw `magic` and a checked or calculated length. GET selectors obtain the ID
-through `Parameter::ID`, defaulted from binrw's `WriteMagic` trait.
-The separate capability table records model-specific command/selector coverage
-without coupling codecs to a model; it uses `Parameter::ID` for parameter entries
-and `Query` constants for fixed read requests.
-Wire serialization remains explicit and
-little-endian, not a memory-layout cast.
+- [Parameter and command codecs](PROTOCOL.md#parameter-and-command-codecs):
+  typed GET/SET payloads, framing, validation and unknown-value preservation.
+- [Model capabilities](PROTOCOL.md#model-capabilities):
+  model/firmware scope, source attribution and recording/live-preview candidates.
+- [Preview command contracts](PROTOCOL.md#preview-command-contracts):
+  endpoint distinctions, payloads and current lifecycle behavior.
 
-`RotationStateValue` (`0014`) is read-only.
-Its `RotationStateValue` contains
-`reserved_before`, `orientation_code`, and `reserved_after`; the targeted
-layout is `[0, code, 0]`. This derived orientation is not a raw rotation-lock
-configuration or sensor reading. Physical direction/degree mappings remain
-unspecified, unknown codes remain raw, and no autorotation SET is exposed.
-The former `mode_code`/`device_angle_code`/`sensor_angle_code` field names
-have been replaced to avoid implying those unsupported meanings.
-
-Binary command payloads, numeric wire types, DUML/UDP framing, ACKs and media
-headers use `binrw`. Field types own their wire representation; fixed layouts
-use derives, while checksum coverage, request-dependent validation and bitmap
-algorithms remain explicit. Closed numeric enums use `#[brw(repr = u8)]`
-(or `u16`); open enums use variant `magic` attributes followed by a raw
-`Unknown(u8)` fallback. Unknown codes and opaque extensions stay lossless.
-Fixed command layouts can use `magic`; derived writers calculate length
-prefixes without exposing them as caller-settable fields. Maps remain useful
-for lossless raw representations and checked conversions.
-The module-version reply reads its fixed fields directly; `product_label()`
-names the text accurately, while `hardware()` remains a compatibility alias.
-
-There are no project-specific reader/writer types. Use
-`BinRead`/`BinWrite` with standard cursors for composition. The free boundary
-functions `protocol::encode(&value)` and `protocol::decode::<T>(bytes, args)`
-use those traits directly with little-endian defaults. Encoding returns only
-complete encoded values; decoding rejects trailing bytes. Arguments are native binrw
-arguments: `()` for ordinary payloads or `(&request,)` for contextual replies.
-Typed DUML command structs encode the contiguous `[command_set, command_id, payload...]`
-DUML body. Their binrw magic contains only `[command_set, command_id]` and
-supplies the default `CommandPacket::COMMAND_ID`. Fixed payload bytes are separate
-calculated fields; fixed read payload constants also feed capability matching.
-Default `CommandPacket` and `Query` trait methods derive routing identity,
-construct requests, expose payload-only bytes
-for raw APIs, and decode replies while checking their command identity.
-`MessageContext` supplies sender, receiver, sequence and flags independently
-of the body; DUML framing calculates length and checksums and composes the
-command body once.
-`Get<T>` and `Set<T>` include the camera command prefix as well as their parameter
-envelope. The application device-info response also encodes its command prefix.
-Startup/write requests, BLE keepalive/setup and notifications follow the same
-command-only magic structure. Raw BLE pairing-arm bytes are a GATT characteristic
-write, not a DUML command, and deliberately have no command prefix. Each command
-module starts with module documentation, followed by imports, then the main
-command struct's documentation and declaration, before supporting value types.
-
-Typed `Query::Response` is the complete command reply. GET and Reply structs
-declare the same two-byte command-only magic; `Query` checks their agreement
-and decodes the complete reply without adding another prefix. Header metadata
-remains separate in `MessageContext`, and status is an ordinary reply field,
-not magic. Command-specific accepted fields live directly in `…Reply` structs,
-without redundant `…Data` holders. `CommandReadReply<T, R = RemainingBytes>` wraps
-them in `Accepted(T)` or `Rejected { status, extension }`: rejections preserve
-opaque bytes by default, with a custom rejection type only for a useful,
-established layout. Genuinely reused parameter, accessory and media data types
-remain separate. `CommandReply<C, T>` remains available for raw write acknowledgments.
-Paired read-command types use matching descriptive `…Get` and `…Reply` names
-(for example, `CameraAudioGet` and `CameraAudioReply`). Write requests and
-reusable parameter value types retain their operation-specific names. Sessions use
-`execute_query::<Q>()` with no request argument. Direct `protocol::encode(&query)`
-now returns command bytes plus payload; use `query.payload()` only when an
-explicitly raw API already takes the command separately.
-Command declarations and opaque response structs are explicit; the former
-`camera_read_query!` and `camera_data!` generation macros are removed.
-Command codecs use native binrw fields, calculated constants and lengths,
-and field assertions rather than mapping entire structs through wire tuples.
-Opaque replies keep their raw byte accessors and uninterpreted extensions.
-`RemainingBytes<const MIN: usize = 0>` reads opaque tails through EOF of a bounded
-payload reader and enforces the minimum on construction, decoding and encoding.
-Private storage is exposed through `as_slice()` or consumed with `into_vec()`.
-`RemainingBytes` allows empty tails/rejections; `RemainingBytes<1>` requires data.
-Larger fixed minimums use the same type; embedded lengths/counts retain explicit
-command-specific checks. Construct values with `RemainingBytes::<MIN>::new(bytes)`.
-Custom codecs remain for shared contextual replies and checked packed strings;
-accessory and media-state alternatives use derived binrw enums. Media rejections
-read directly through EOF with branch assertions; calibration-file records share
-their nested data-length calculation between construction and wire codecs.
-
-Numeric enums no longer provide generated primitive `From`/`Into`/`TryFrom`
-implementations, and no numeric-enum conversion dependency is required.
-Unsupported closed-enum codes and malformed native enum variants produce
-`Error::WireCodec`, including malformed accessory and media-state layouts.
-Branch errors remain available in the codec error's source; directly raised
-domain validation errors retain their existing library variants. Codec errors retain their source
-without displaying potentially sensitive details in the top-level message.
-Frame lengths and counts remain checked before reading variable bodies.
-FEC, incremental framing and H.264 bitstream algorithms remain explicit.
-
-```rust
-use unofficial_osmo_camera::protocol::commands::camera::cmd_02_8e_parameters::{
-    EisValue, Get, ParameterReply, Set,
-};
-use unofficial_osmo_camera::{
-    ControlSession, Result,
-    protocol::commands::reply::CommandReadReply,
-};
-
-fn read_setting(session: &mut ControlSession) -> Result<CommandReadReply<ParameterReply<EisValue>>> {
-    session.execute_query::<Get<EisValue>>()
-}
-
-fn write_setting(session: &mut ControlSession, approved: bool) -> Result<()> {
-    session.execute_parameter_set(Set::new(EisValue::new(7)?), approved)
-}
-```
-
-Each writable payload has a `new` constructor beside its struct,
-such as `AddCustomModeValue::new(raw_index, operation)`. These constructors
-are for SET callers only: named arguments build the supported record, including
-its canonical tags and reserved fields. `Set::new(value)` is an infallible
-wrapper: it preserves fields without validation or normalization. Callers
-using public fields or GET values directly are responsible for SET validity.
-Binrw owns GET decoding and the wire layout; it does not call `new` or apply
-SET restrictions.
-Multi-field records expose named fields rather than opaque byte arrays:
-TC uses `TcData::Byte`/`Word`, beauty uses fifteen raw effect values, and
-calibration uses `CalibrationName::new` plus an operation or focal code.
-Raw types without a `Parameter` implementation cannot instantiate `Set<T>`.
-Operation metadata describes established support, not permission to execute.
-Use `Set::value()` or `into_value()` to access
-the payload. Neither wrapping nor encoding reapplies constructor checks;
-wire-length and layout errors still surface during encoding.
-`ControlSession::execute_parameter_set` requires explicit approval on each call
-and accepts only an exact one-byte successful ACK; rejections and malformed
-replies are errors. It does not retry, reconnect or confirm the setting's effect.
-The old `CameraParameter`, `CameraParameterValue`, `CameraParametersGet`,
-`CameraParameterSet` and parameter-specific `set` wrappers are removed.
-
-Capability reads also have independent query types: `EiRangeGet`,
-`RecommendedEiGet`, `LensInformationGet` and `AccessoriesGet`.
-For example, `session.execute_query::<AccessoriesGet>()` returns
-`AccessoriesReply`; the first three return status-bearing replies with
-distinct opaque, nonempty value types. Accessories retain outer and inner
-rejections separately and validate operation/selector before interpreting the
-inner status. Outer rejection uses the shared `CameraReadReply::Rejected`;
-inner rejection is `CameraReadReply::Accepted(AccessoriesData::Rejected { .. })`.
-The capability query and value definitions are explicit structs without custom
-macros. The previous `CapabilityQuery` selector enum is removed.
-Both LAN and BLE typed query entry points now take only the query type.
-
-All 37 targeted parameter entries document their value shape or an explicit unknown.
-There are **33 available checked SET constructors**, with restricted subsets of some
-write branches. Fixed record widths are expressed by the binrw payload types.
-TC records have two possible widths, selected by their second byte.
-Covered writes include
-raw audio/mirror codes, bounded image/shutter/recording controls, tagged
-autofocus records, sparse `001F`/`003C` codes and capture-aspect values.
-Capture-aspect SET accepts only 0..=255 despite its four-byte wire width.
-`BeautyEffectValue` carries the complete 62-byte indexed record; its SET constructor
-builds the canonical count, indices and one-byte entries.
-Individual effect labels/scales remain unknown, and partial beauty patches
-are not exposed.
-
-Additional checked shapes are duration's five four-byte raw codes;
-the flag-1 nine-byte short-video record;
-TC tag 1 with selector 1..=3 and one byte, or selector 4 and four bytes;
-custom-mode `[raw_index, operation_0_to_3]`; storage-sync start
-`[source_0_to_3, destination_0_to_3, 1]` or canonical stop `[0, 0, 2]`;
-motionlapse preview/interrupt `[raw_code, 0_or_1]`; and a raw motionlapse
-mode byte. These describe byte contracts, not physical mode labels,
-calibration procedures or completion guarantees. Duration SET zero-extends
-its low word as a host choice; arbitrary duration GET bytes are not replayable.
-Short-video added-duration writes remain outside the checked subset.
-
-Camera `0019` exposes only an 11-byte zero-destination streaming-parameter
-trigger: all bytes zero except byte 3 equal to 1. This camera path does not
-forward a destination, resolution or bitrate; the codec does not configure,
-start or stop RTMP. Other profile variants remain unchecked.
-
-The calibration `002B` constructor supplies only action 3's raw focal-length record: zero
-metadata, a byte-length-prefixed NUL-terminated label, LE16 extra length 4,
-raw LE16 focal code and two zero bytes. Units and supported codes are unknown.
-Actions 0..=2 remain outside the constructor subset because their native selectors
-can terminate the provider process. The `002D` constructor permits actions 0/2
-with one name, or 1 with two names,
-behind an exact LE16 data length. Names are nonempty printable ASCII, at most
-127 characters each; total values cannot exceed 255 bytes. These are byte-level
-checks, not a calibration/file-operation procedure, path policy or provider
-availability guarantee. No apply/rename/delete meanings are assigned.
-
-The four GET-only IDs have no checked SET constructor. They remain manually
-encodable through `Set<T>`, which does not enforce operation support.
-Unknown codes in supported GET layouts remain raw without granting a checked
-write; unsupported layouts are explicit errors.
-Duration GET retains all four bytes, but only its low word has
-an established conversion. Known widths/codes never imply current-mode
-availability, physical semantics, safe retries or an applied setting.
-
-Checked constructors include recording EIS
-(`EisValue::new`, 0..=7), independent live-view EIS (`LiveViewEisValue::new`, 0..=7),
-stabilization preference (`StabilizationPreferenceValue::new`, 0/1), and stream
-quality (`StreamQualityValue::new`, 0/1/2). Mode labels and availability are not
-inferred from those ranges. To encode a boolean compatibility value, pass
-`u8::from(enabled)` to the relevant constructor; EIS codes 0/1 are not a physical
-on/off guarantee. Nano field-of-view SET codes are
-restricted to 0..=5 and voice-language SET codes to 0/1; invalid values now
-return an error at construction. GET decoding continues to preserve
-unknown codes without applying SET limits. These APIs only encode payloads;
-they neither send requests nor authorize changing a camera setting.
-
-### Preview command API migration
-
-The current codecs distinguish camera parameters at recipient `01`, media
-streaming at `08`, and live-view control at `41`. Their byte layouts are not
-interchangeable. Constructor bounds describe restricted compatibility subsets,
-not guaranteed runtime availability. Manual payloads remain permissive by design.
-
-- `02:09` emits ten zero bytes and action `03`/`04`.
-- `09:A8` retains the fixed I-frame request, now named `LiveViewIFrameRequest`
-  rather than transmission startup.
-- `02:1A` remains an encoding-only quality payload, separate from `02:8E/0006`.
-- `07:47` retries matching `01 FF` replies under an existing bounded host
-  policy, not proof of transient failure.
-- `03:DA` is an unconfirmed compatibility prelude, not verified physical
-  gimbal initialization.
-
-These API contracts do not establish a firmware support matrix, safe retry semantics,
-or working media delivery. It adds no automatic requests, settings writes,
-reconnects or hardware tests.
-
-Preview command API migration (breaking; no legacy aliases):
-
-| Previous API | Replacement |
-|--------------|-------------|
-| `camera::cmd_02_09_live_view_source` | `camera::cmd_02_09_live_view_control` |
-| `LiveViewSourceRequest::default()` | `LiveViewControlRequest::start()` |
-| `LiveViewToggleRequest { gate: LiveViewGate::Enable/Disable }` | `LiveViewControlRequest::start()` / `stop()`, or `new(LiveViewControlAction::Start/Stop)` |
-| `CameraCommand::LiveViewSource` | `CameraCommand::LiveViewControl` |
-| `live_view::cmd_09_a8_start_transmission` | `live_view::cmd_09_a8_live_view_control` |
-| `StartTransmissionRequest::default()` | `LiveViewIFrameRequest::default()` |
-| `LiveViewCommand::StartTransmission` | `LiveViewCommand::Control` |
-
-`LiveViewControlRequest` exposes an `action`, not a source index or gate.
-Its start/stop helpers encode the same eleven-byte requests as before. The
-I-frame request remains the same ten bytes, and the automatic preview sequence
-still sends start followed by an I-frame request. No stop request, quality
-write, retry or reconnect was added to the lifecycle. `02:1A` stays a manually
-encodable, unverified command; no replacement encoder settings are inferred.
+These notes do not establish device availability or grant hardware authorization.
+The setup and usage sections below retain their explicit operation approvals.
 
 ### Explicit RTMP controls (experimental)
 
@@ -373,7 +111,9 @@ is unverified. Debug formatting redacts destination bytes; the settings
 still contain the key in memory and on the control transport.
 
 The high-level configuration uses default FPS, zero-valued unknown fields
-and adaptive bitrate off. `.with_adaptive_bitrate(true)` requests its flag,
+and adaptive bitrate off. `RtmpConfig::new` requires a nonzero `u16`
+`bitrate_kbps`; that encoding bound is not a supported operating range.
+`.with_adaptive_bitrate(true)` requests its flag,
 not a guaranteed adaptive policy. Resolution selectors 4/10 request the
 720/1080 size families; rotation can swap width and height. No safe bitrate
 range, delivered frame rate, 4K RTMP mode or working Nano publication is
@@ -444,30 +184,280 @@ Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/).
 The uv workspace shares one `.venv` and `uv.lock` at the repository root,
 including when commands target the Python package in its subdirectory.
 Select `.venv\Scripts\python.exe` in VS Code on Windows (`.venv/bin/python`
-on Linux/macOS). An older nested `.venv` is no longer used; do not move it,
-because virtual environments contain location-specific paths.
-GStreamer is not required. uv uses the default `microsoft-python` package index
+on Linux/macOS). Use the repository-root environment; do not relocate virtual
+environments, because they contain location-specific paths.
+GStreamer is not required. Standard Python builds include the Rust BLE feature.
+Builds without `ble` reject approved BLE-first startup with `UnsupportedError`,
+not a LAN-only fallback. Linux builds with BLE require `libdbus-1-dev` and
+`pkg-config`. BLE operations are explicitly opt-in at runtime.
+uv uses the default `microsoft-python` package index
 at `https://packagefeedproxy.microsoft.io/pypi/simple/`.
 
-```powershell
+```bash
 uv sync --locked --link-mode copy
-uv run --project .\python\unofficial-osmo-camera --no-sync maturin develop --locked --manifest-path .\python\unofficial-osmo-camera\Cargo.toml
-uv run --project .\python\unofficial-osmo-camera --no-sync python -m unittest discover -s .\python\unofficial-osmo-camera\tests
-uv run --project .\python\unofficial-osmo-camera --no-sync ruff check .\python\unofficial-osmo-camera
-uv run --project .\python\unofficial-osmo-camera --no-sync ruff format --check .\python\unofficial-osmo-camera
-cargo fmt --manifest-path .\python\unofficial-osmo-camera\Cargo.toml -- --check
+uv run --project python/unofficial-osmo-camera --no-sync maturin develop --locked \
+  --manifest-path python/unofficial-osmo-camera/Cargo.toml
+uv run --project python/unofficial-osmo-camera --no-sync python -m unittest discover \
+  -s python/unofficial-osmo-camera/tests
+uv run --project python/unofficial-osmo-camera --no-sync ruff check python/unofficial-osmo-camera
+uv run --project python/unofficial-osmo-camera --no-sync ruff format --check python/unofficial-osmo-camera
+cargo fmt --manifest-path python/unofficial-osmo-camera/Cargo.toml -- --check
 ```
 
 Repeat `uv sync --locked --link-mode copy` after tooling lockfile updates;
 `--no-sync` uses the installed tools without updating them. Copy mode avoids
 hardlink warnings when the cache and workspace are on different drives.
 
+### Raw and typed protocol bindings
+
+`osmo_camera.protocol.raw` exposes lossless DUML `Message` values, explicit
+`MessageContext` framing and bounded `Request` exploration. Payloads and unknown
+identities remain uninterpreted; frame decoding still checks lengths/checksums.
+`osmo_camera.protocol.typed` exposes known wire contracts: capability topics,
+subscriptions, replies, notifications, tables and open resolution/frame-rate
+codes. "Typed" means verified wire layout and applicable envelope validation,
+not verified support on every model or firmware. Model support/evidence belongs
+in the Rust capabilities catalog. Generic resolution dimensions do not establish
+camera support or live-preview dimensions.
+
+Both layers use Rust codecs and the same native session owner. Typed requests
+convert with `.to_raw(timeout=...)`; replies and notifications decoded from raw
+frames retain those frames in `.raw` and return them with `.to_raw()`, including
+transport sequence, flags, unknown values and opaque bytes. Body-only
+notifications decoded with `.decode(body)` have `.raw is None` and require an
+explicit `raw.MessageContext` for `.to_raw(context)`; headers are never invented.
+Use explicit `osmo_camera.protocol.raw` and `osmo_camera.protocol.typed`
+namespaces.
+Encoding/decoding sends nothing, and payloads are not included in object
+representations or codec errors.
+
+For an already explicitly authorized, open `session`, the layers interoperate
+without a second connection:
+
+```python
+from osmo_camera.protocol import typed
+
+subscription = typed.CapabilitySubscribe(typed.CapabilityTopic.VIDEO_FORMATS, 1)
+reply_frame = session.request_raw(
+    subscription.to_raw(timeout=3.0), approve_unclassified=True
+)
+reply = subscription.decode_reply(reply_frame)
+reply.require_success()
+assert reply.to_raw().encode() == reply_frame.encode()
+```
+
+`session.subscribe(subscription, approve_unclassified=True)` uses that same
+raw exchange path and returns the typed reply directly. Raw requests still use
+Rust's exact known-read allowlist, 0.1..30-second timeout bounds and session-level
+plus per-request approvals for unclassified operations. Media-write restrictions
+cannot be bypassed by choosing the raw layer.
+
+### Capability enumeration
+
+`ControlSession.connect(profile_path, approved=True, allow_unclassified=True)`
+loads an existing caller-selected camera profile through Rust. Connecting
+performs LAN pairing/app registration and a country GET; it does not discover a
+camera, join a network, initialize BLE, start preview or change capture mode.
+The profile must already contain a verified LAN address and pairing identity.
+Use the session as a context manager for explicit teardown. Blocking operations
+release the GIL; a `Cancellation` token can be signaled from another thread.
+Native failures surface as `CameraError` subclasses, not successful empty results.
+
+To explicitly prepare the camera before LAN control, opt into BLE-first startup:
+
+```python
+from osmo_camera import ControlSession
+
+with ControlSession.connect(
+    profile_path,
+    approved=True,
+    allow_unclassified=True,
+    ble_first=True,
+    approve_ble=True,
+) as session:
+    # Use raw or typed requests on this same native owner.
+    ...
+```
+
+Every enabled startup begins with BLE discovery, saved-identity pairing/wake
+and a successful live health reply. A saved camera Wi-Fi MAC is checked when
+present, before associating with the saved network. Rust verifies another BLE
+health reply, explicitly closes BLE, and waits at most 10 seconds for the saved
+LAN pairing endpoint before opening one LAN control session. The native ownership
+lease is retained across the transport handoff. Pairing approval on the camera
+may still be needed. It does not reset credentials, modify the
+profile, switch the computer's network, or retry a failed control connection.
+The profile must already contain a verified LAN address, pairing identity and
+complete saved Wi-Fi settings. Initial pairing remains a separate explicit step.
+`CameraProfile::connect_control_via_ble` supplies this lifecycle to native callers;
+`CameraConfig` connections remain LAN-only. Rust lifecycle logging reports stages
+without publishing network identifiers or credentials.
+BLE-first startup is not an automatic recovery loop or a guarantee for every
+power/idle state. A failed stage surfaces its error; another attempt needs
+explicit caller action.
+
+### Unified capability view
+
+`osmo_camera.capabilities` exposes Rust-backed model metadata and immutable
+camera evidence, without duplicating the catalog in Python:
+
+```python
+from osmo_camera.capabilities import (
+    Availability,
+    CapabilityCatalog,
+    CaptureMode,
+    resolve_capabilities,
+)
+
+catalog = CapabilityCatalog.nano()  # Explicit model selection, not detection.
+view = resolve_capabilities(catalog=catalog, mode=CaptureMode.VIDEO)
+assert view.recording_formats.state is Availability.MISSING
+assert view.recording_formats.current is None
+candidates = view.recording_formats.published
+```
+
+This example is entirely offline. Pass decoded `CapabilityNotification` values
+as `resolve_capabilities(snapshots, ...)` to attach camera evidence without
+opening a connection. For an already authorized, open `session`, collect through
+the same native owner:
+
+```python
+from osmo_camera.capabilities import CapabilityCatalog, CaptureMode
+from osmo_camera.enumerate_capabilities import collect_capabilities
+
+view = collect_capabilities(
+    session,
+    catalog=CapabilityCatalog.nano(),
+    mode=CaptureMode.VIDEO,
+    timeout=15.0,
+    approve_subscriptions=True,
+    approve_acknowledgments=True,
+)
+current = view.recording_formats.current
+candidates = view.recording_formats.published
+```
+
+Each successful call returns one immutable `Capabilities` view. Missing-topic timeouts
+produce incomplete views, not a different return type or a successful static
+fallback. Transport failures, rejections, cancellation and malformed data raise.
+The native control owner retains inbound frames across subscription exchanges,
+idle ticks and receipt ACKs. Its queue is bounded to 1,000 messages; callers
+must consume notifications, and overflow raises rather than silently dropping
+evidence.
+The three topic views are `recording_formats`, `slow_motion_ratios` and
+`capture_aspects`; `view.topics` iterates them in that order. Each retains its
+original `.notification`, including `.notification.raw` when decoded from a
+framed message.
+
+| Topic state | `.current` | Meaning |
+|-------------|------------|---------|
+| `Availability.MISSING` | `None` | No notification received; support is unconfirmed |
+| `Availability.AVAILABLE` | Tuple of rows, possibly empty | Camera reports an available table in its current state |
+| `Availability.UNAVAILABLE` | Empty tuple | Camera explicitly reports this topic unavailable in its current state |
+| `Availability.UNKNOWN` | `None` | Notification received with an unknown availability value; `.error` retains the interpretation failure |
+
+`.published` stays separate even when a live table excludes those candidates.
+`view.complete` is true only when every topic is available or explicitly
+unavailable; it does not mean every format is supported or tested.
+`view.missing` lists topics with no notification, while `view.unresolved` also
+includes unknown availability. Check `.state`, not just whether `.current` is
+empty. Duplicate known-topic snapshots require explicit caller selection, not
+guessed sequence chronology. Offline resolution retains unknown-topic
+notifications in `.other_notifications`; live collection rejects unknown topics
+explicitly rather than treating them as one of the three required snapshots.
+
+Without mode context, published recording candidates retain all their individual
+mode scopes. `CaptureMode` preserves unknown byte codes in `.code` and exposes
+compatibility labels in `.name`. Selecting a mode filters only the published
+recording-format candidates: it neither reads nor changes the actual camera
+mode, and it does not filter camera-reported rows. Slow-motion candidates retain
+their catalog scope and are derived from Rust's published recording formats;
+each candidate keeps its contributing `.formats`. Published recording aspects are **not**
+mapped onto raw aspect codes: that wire equivalence is not established.
+
+`view.command_coverage` retains access, evidence and typed firmware scope
+(`MATCHES`, `DIFFERENT`, `UNKNOWN`, `UNSPECIFIED`). A scope match is not device
+confirmation or write permission. `view.preview_observations` contains published
+observations, never stream measurements or selectable output modes. Source URLs
+remain on `catalog.sources`. Model and firmware context are never inferred.
+Pass a non-empty `firmware` string for exact comparison with a command's stated
+scope; omit it when unknown. Context validation occurs before subscriptions.
+
+This Python API intentionally has no backward-compatibility aliases. Import
+messages and requests through `protocol.raw`, known contracts through
+`protocol.typed`, and decode notifications with `CapabilityNotification.from_raw`.
+
+The opt-in runner subscribes to all three known capability topics and
+validates recording-format, slow-motion and raw aspect rows using Rust:
+
+```bash
+uv run --project python/unofficial-osmo-camera --no-sync python -m osmo_camera.enumerate_capabilities \
+  --profile .credentials/example.toml --timeout 15 \
+  --approve-registration --approve-subscriptions --approve-acks
+```
+
+Add `--catalog nano`, optionally `--capture-mode 0x01 --firmware VERSION`, to
+include explicitly scoped published candidates in the CLI output.
+Add `--ble-first --approve-ble` to prepare through BLE before each enumeration.
+Both flags are required together and additionally authorize camera Wi-Fi
+association; the existing registration/subscription/ACK approvals remain required.
+
+Run only with explicit device authorization, on the already configured LAN,
+after closing every other camera owner. No hardware operations occur on import
+or during normal tests. The three approval flags authorize registration,
+subscriptions and per-notification receipt ACKs respectively. Subscriptions may
+outlive the session; no unsubscribe contract is established. The enumeration
+window is bounded to 1..30 seconds after connection, and native connection and
+cleanup bounds remain in force. No reconnect, mode switch or metadata fallback
+occurs. Missing topics remain explicit in the returned capability view.
+The runner exits 0 only for a complete view, 1 for incomplete/unknown results or
+camera errors, and 2 for invalid arguments before connecting. It prints partial
+observations when available; published candidates never count as received topics.
+Unavailable and available-empty tables are distinct. Notifications are matched
+by topic name, not an assumed mapping from
+sequence to subscription ID. Snapshots are not atomic across mode changes.
+The output includes decoded rows, state/errors and optional published-candidate
+counts, not raw captures, addresses or pairing data.
+
+Native `.pyi` declarations are generated from the PyO3 binding annotations with
+the optional, MIT/Apache-2.0 `pyo3-stub-gen` dependency. It is not enabled in
+normal extension builds. Regenerate after binding changes and check for drift:
+On Linux, the native generator needs the selected interpreter's shared-library
+directory on `LD_LIBRARY_PATH`.
+
+```bash
+if [ "$(uname -s)" = Linux ]; then
+  python_libdir="$(uv run --project python/unofficial-osmo-camera --no-sync python -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')"
+  export LD_LIBRARY_PATH="$python_libdir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+uv run --project python/unofficial-osmo-camera --no-sync cargo run --locked \
+  --manifest-path python/unofficial-osmo-camera/Cargo.toml --features stubgen --bin stub-gen
+uv run --project python/unofficial-osmo-camera --no-sync cargo run --locked \
+  --manifest-path python/unofficial-osmo-camera/Cargo.toml --features stubgen --bin stub-gen -- --check
+```
+
+The generated native stub is excluded from Ruff's source formatting; its exact
+generated contents and native export/property coverage have separate checks.
+
 Re-run `maturin develop` after changing Rust code. For a distributable wheel
 and source archive:
 
-```powershell
-uv run --project .\python\unofficial-osmo-camera --no-sync maturin build --locked --release --sdist --manifest-path .\python\unofficial-osmo-camera\Cargo.toml --out .\dist
+```bash
+uv run --project python/unofficial-osmo-camera --no-sync maturin build --locked \
+  --release --sdist --manifest-path python/unofficial-osmo-camera/Cargo.toml --out dist
 ```
+
+Before publication, also verify that the source archive builds independently.
+Extract it outside the checkout, then run `maturin build --locked --release`
+**from the extracted archive root**, which contains its generated
+`pyproject.toml`. That file selects the nested standalone Cargo manifest and
+Python source directory. Building the archive's workspace-root Cargo manifest
+directly is not the Python build entry point. Use the existing uv-managed
+maturin executable; do not initialize a second project or change package feeds.
+Install the resulting wheel into a separate `uv venv` and run the same offline
+test suite without the editable package. Review both archive and wheel contents
+for notices, generated stubs, local evidence, caches, debug symbols and private
+metadata paths; successful compilation alone is not a release audit.
 
 ## GStreamer plugin
 
@@ -666,8 +656,9 @@ the two `.crate` source archives, checksums, and native archives for:
 - macOS Intel and Apple Silicon: `libgstosmo.dylib` and `osmo-pair`.
 
 Native archives include the plugin under `lib`, the pairing utility under
-`bin`, licenses, third-party notices, and `BUILD-INFO.txt` with runtime
-requirements. GStreamer itself and Python wheels are not included.
+`bin`, [README.md](README.md), [PROTOCOL.md](PROTOCOL.md), licenses, third-party
+notices, and `BUILD-INFO.txt` with runtime requirements. GStreamer itself and
+Python wheels are not included.
 
 Maintainers must configure protected release tags and the `CargoPublish`
 environment with approval and a narrowly scoped `CARGO_REGISTRY_TOKEN`.

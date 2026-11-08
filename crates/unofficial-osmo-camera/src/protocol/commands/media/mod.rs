@@ -1,7 +1,7 @@
 //! Media-endpoint streaming contracts, separate from camera-endpoint commands.
 //!
-//! These are unofficial interoperability encodings, not a guarantee of Nano
-//! runtime support. A successful command reply does not establish publication.
+//! These are unofficial interoperability encodings, not a guarantee of device
+//! support. A successful command reply does not establish publication.
 
 pub mod cmd_02_8e_streaming_control;
 pub mod cmd_02_e1_broadcast_mode;

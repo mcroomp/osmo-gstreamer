@@ -1,9 +1,9 @@
 //! Wire formats, shared identities, and command-specific payload codecs.
 //!
 //! These describe this implementation's contracts, not an official vendor
-//! specification. Targeted compatibility is Osmo Nano; model-qualified
-//! interpretations marked as candidates remain unverified for other models,
-//! firmware versions and modes. Unknown fields are preserved where supported.
+//! specification. Model/firmware scope and compatibility evidence live in
+//! [`capabilities`], separately from wire codecs. Unknown fields are preserved
+//! where supported; codecs do not establish device or mode availability.
 
 pub mod capabilities;
 mod codec;
@@ -14,6 +14,7 @@ mod exploration;
 pub mod identity;
 mod query;
 mod transport;
+pub mod video_formats;
 
 pub(crate) use codec::{binrw_error, codec_error};
 pub use codec::{decode, encode};

@@ -28,7 +28,6 @@ pub struct CameraVideoCaptionGet;
 ///         code: u8, extension: [u8; remaining] | opaque }
 /// ```
 ///
-/// The Nano reply clears bits 5 and 6; bits 0..4 and 7 remain raw.
 /// The decoder preserves every received bit rather than masking it again.
 #[binrw]
 #[derive(Clone, Debug, PartialEq, Eq)]

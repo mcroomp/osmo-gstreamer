@@ -72,9 +72,10 @@ pub struct AdvancedLiveReversalGet {
 #[cfg(test)]
 mod tests;
 
-/// Advanced-mode code: GET 0/1, SET 0..=2; not live reversal.
+/// Raw advanced-mode code; the SET constructor accepts 0..=2.
 ///
-/// SET also updates voice control after the primary service call.
+/// GET decoding preserves every byte. Encoding does not send a request or
+/// perform additional voice-control operations.
 #[binrw]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[brw(little, magic = 0x0000u16)]
@@ -100,7 +101,7 @@ impl AdvanceModeValue {
     }
 }
 
-/// Legacy identifier; not in the confirmed Nano catalogue.
+/// Legacy identifier; operation coverage is defined by the capability profile.
 #[binrw]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[brw(little, magic = 0x0002u16)]
@@ -120,7 +121,7 @@ impl BeautyValue {
     }
 }
 
-/// Legacy identifier; not in the confirmed Nano catalogue.
+/// Legacy identifier; operation coverage is defined by the capability profile.
 #[binrw]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[brw(little, magic = 0x0003u16)]
@@ -140,9 +141,11 @@ impl FpvControlValue {
     }
 }
 
-/// Raw stream-quality code: SET 0=Default, 1=Normal, 2=High.
+/// Raw stream-quality code; the SET constructor accepts 0..=2.
 ///
 /// No bitrate or resolution mapping is assigned; GET retains other codes.
+/// This is not the recording format (`02/18` and `02/19`), an LCD format,
+/// or a verified numeric live-preview resolution selector.
 #[binrw]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[brw(little, magic = 0x0006u16)]
@@ -168,7 +171,7 @@ impl StreamQualityValue {
     }
 }
 
-/// Legacy identifier; not in the confirmed Nano catalogue.
+/// Legacy identifier; operation coverage is defined by the capability profile.
 #[binrw]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[brw(little, magic = 0x0007u16)]
@@ -181,8 +184,10 @@ pub struct PreviousModeValue {
 
 impl Parameter for PreviousModeValue {}
 
-/// Recording stabilization code; Nano SET accepts 0..=7, not just 0/1.
+/// Recording stabilization code; the SET constructor accepts 0..=7, not just 0/1.
 ///
+/// Shares the one-byte [`CameraStabilizationMode`] with [`LiveViewEisValue`],
+/// but uses an independent parameter ID.
 /// A zero GET code alone does not establish that stabilization is disabled.
 #[binrw]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -191,21 +196,23 @@ pub struct EisValue {
     #[br(temp, assert(length == 1, "camera parameter value width mismatch"))]
     #[bw(calc = 1u8)]
     length: u8,
-    pub code: u8,
+    pub mode: CameraStabilizationMode,
 }
 
 impl Parameter for EisValue {}
 
 impl EisValue {
-    /// Construct a SET payload with a supported value; binrw decodes GET independently.
-    pub fn new(code: u8) -> Result<Self> {
-        if code > 7 {
+    /// Construct a payload with code 0..=7; GET decoding is independent.
+    pub fn new(mode: CameraStabilizationMode) -> Result<Self> {
+        if let CameraStabilizationMode::Unknown(code) = mode
+            && code > 7
+        {
             return Err(Error::UnsupportedValue {
                 field: "camera stabilization code",
                 value: code,
             });
         }
-        Ok(Self { code })
+        Ok(Self { mode })
     }
 }
 
@@ -261,7 +268,7 @@ impl VoiceControlValue {
     }
 }
 
-/// Legacy identifier; not in the confirmed Nano catalogue.
+/// Legacy identifier; operation coverage is defined by the capability profile.
 #[binrw]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[brw(little, magic = 0x000bu16)]
@@ -300,10 +307,9 @@ impl VoiceLanguageValue {
     }
 }
 
-/// Raw ISO-limit code, distinct from user ISO; GET is a cached byte.
+/// Raw one-byte ISO-limit code, distinct from user ISO.
 ///
-/// SET replaces an indexed byte in native state; physical ISO labels,
-/// index meanings and active mode restrictions are unspecified.
+/// Physical ISO labels, index meanings and active mode restrictions are unspecified.
 #[binrw]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[brw(little, magic = 0x000fu16)]
@@ -323,7 +329,7 @@ impl IsoLimitValue {
     }
 }
 
-/// Legacy identifier; not in the confirmed Nano catalogue.
+/// Legacy identifier; operation coverage is defined by the capability profile.
 #[binrw]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[brw(little, magic = 0x0011u16)]
@@ -343,7 +349,7 @@ impl ScreenSleepValue {
     }
 }
 
-/// Legacy identifier; not in the confirmed Nano catalogue.
+/// Legacy identifier; operation coverage is defined by the capability profile.
 #[binrw]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[brw(little, magic = 0x0012u16)]
@@ -363,7 +369,7 @@ impl AutoOffValue {
     }
 }
 
-/// Legacy identifier; not in the confirmed Nano catalogue.
+/// Legacy identifier; operation coverage is defined by the capability profile.
 #[binrw]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[brw(little, magic = 0x0015u16)]
@@ -389,7 +395,7 @@ impl SpotMeteringValue {
     }
 }
 
-/// Read-only code: provider 1 becomes 2; other provider values become 0.
+/// Raw one-byte read-only lens-control code.
 ///
 /// This is not a lens capability enumeration.
 #[binrw]
@@ -406,7 +412,7 @@ impl Parameter for LensControlValue {}
 
 /// Unmapped one-byte control; SET codes are 1, 2, 4, 8 or 16.
 ///
-/// Those wire codes map to native ordinals 0..=4, not a bitmask SET.
+/// These are individual constructor codes, not a combinable bitmask SET.
 #[binrw]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[brw(little, magic = 0x001fu16)]
@@ -478,7 +484,7 @@ impl SelfieFollowingValue {
     }
 }
 
-/// Unmapped one-byte control: SET 0/1; GET tests whether native value is 1.
+/// Unmapped one-byte control: the SET constructor accepts 0/1; GET stays raw.
 #[binrw]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[brw(little, magic = 0x0028u16)]
@@ -504,7 +510,7 @@ impl Unknown0028Value {
     }
 }
 
-/// Independent preference: Nano SET accepts 0/1; GET retains the raw byte.
+/// Independent preference: the SET constructor accepts 0/1; GET retains the raw byte.
 ///
 /// The two preference meanings are unspecified; this is not an EIS mode.
 #[binrw]
@@ -656,9 +662,11 @@ impl RecordingPlanValue {
     }
 }
 
-/// Raw live-view stabilization code, distinct from parameter `0008`.
+/// Live-view stabilization code, distinct from recording parameter `0008`.
 ///
-/// Nano SET accepts 0..=7. Availability and effects on preview are unverified.
+/// The SET constructor accepts 0..=7. Availability and preview effects are unspecified.
+/// Shares the one-byte [`CameraStabilizationMode`] with [`EisValue`], not its
+/// parameter ID, supported physical modes or GET fallback behavior.
 #[binrw]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[brw(little, magic = 0x003eu16)]
@@ -666,21 +674,23 @@ pub struct LiveViewEisValue {
     #[br(temp, assert(length == 1, "camera parameter value width mismatch"))]
     #[bw(calc = 1u8)]
     length: u8,
-    pub code: u8,
+    pub mode: CameraStabilizationMode,
 }
 
 impl Parameter for LiveViewEisValue {}
 
 impl LiveViewEisValue {
-    /// Construct a SET payload with a supported value; binrw decodes GET independently.
-    pub fn new(code: u8) -> Result<Self> {
-        if code > 7 {
+    /// Construct a payload with code 0..=7; GET decoding is independent.
+    pub fn new(mode: CameraStabilizationMode) -> Result<Self> {
+        if let CameraStabilizationMode::Unknown(code) = mode
+            && code > 7
+        {
             return Err(Error::UnsupportedValue {
                 field: "camera live-view stabilization code",
                 value: code,
             });
         }
-        Ok(Self { code })
+        Ok(Self { mode })
     }
 }
 
@@ -717,7 +727,7 @@ pub struct CaptureMinimumIntervalValue {
 
 impl Parameter for CaptureMinimumIntervalValue {}
 
-/// Four-byte raw GET record; inspected stores assign only its low LE16.
+/// Four-byte raw GET record with a constrained low-word SET constructor.
 ///
 /// Low-word codes are 0, 300, 1200, 3600 or 65535; units and the
 /// remaining two GET bytes are unspecified. The SET constructor accepts only
@@ -746,7 +756,10 @@ impl LoopDurationValue {
 
 /// LE32 aspect type; SET rejects values above 255 to avoid truncation.
 ///
-/// The native provider uses one byte; physical ratio labels are unspecified.
+/// Physical ratio labels for this compatibility layout are unspecified.
+/// Other layouts require separate codecs; width and ratio interpretations
+/// must not be inferred from this four-byte representation.
+/// This parameter is distinct from the `02/FF` sensor orientation lock.
 #[binrw]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[brw(little, magic = 0x0046u16)]
@@ -769,7 +782,10 @@ impl CaptureAspectTypeValue {
     }
 }
 
-/// Read-only derived orientation record, not rotation-lock configuration.
+/// Derived orientation record, not rotation-lock configuration.
+///
+/// The capability profile marks it read-only. It has no checked SET constructor,
+/// but generic `Set<T>` can encode it without enforcing operation coverage.
 #[binrw]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[brw(little, magic = 0x0014u16)]
@@ -910,7 +926,7 @@ impl AutofocusStrategyValue {
 
 /// Unmapped LE16 code: 0, 5, 10, 15, 30, 60, 120 or 300.
 ///
-/// These map to native ordinals 0..=7; no physical unit is assigned.
+/// These are constructor codes; no physical unit is assigned.
 #[binrw]
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[brw(little, magic = 0x003cu16)]
@@ -964,7 +980,7 @@ impl Unknown0019Value {
     }
 }
 
-/// Legacy identifier; not in the confirmed Nano catalogue.
+/// Legacy identifier; operation coverage is defined by the capability profile.
 #[binrw]
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[brw(little, magic = 0x0021u16)]
@@ -978,7 +994,7 @@ pub struct P2PShareValue {
 
 impl Parameter for P2PShareValue {}
 
-/// Legacy identifier; the Nano case is a no-op.
+/// Legacy identifier; operation coverage is defined by the capability profile.
 #[binrw]
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[brw(little, magic = 0x0025u16)]
@@ -1092,11 +1108,10 @@ impl CalibrationName {
 /// The SET constructor supplies only operation 3: zero metadata, a length-prefixed
 /// NUL-terminated nonempty ASCII label, LE16 extra length 4, a raw LE16
 /// focal-length code and two zero bytes. Labels have at most 127 chars.
-/// The label is parser-required but is not forwarded by this operation.
+/// The label is required by this payload layout.
 /// Printable ASCII, zero metadata and zero padding are host restrictions.
-/// This does not establish units, a calibration procedure, provider
-/// support or safe execution. Operations 0..=2 remain unavailable because
-/// the inspected providers terminate on their native selectors.
+/// This does not establish units, a calibration procedure, device support or safe
+/// execution. Operations 0..=2 remain outside this constructor's supported subset.
 #[binrw]
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[br(assert(usize::from(length) == 8 + name.wire_length()))]
@@ -1344,12 +1359,29 @@ pub enum CameraFieldOfView {
     Unknown(u8),
 }
 
-/// Legacy stabilization labels for one-byte parameters `0x0008` and `0x003E`.
+/// Shared one-byte wire mode for recording `0x0008` and live-view `0x003E`.
 ///
-/// Names do not establish device support or observed stabilization behavior.
-/// Nano SET accepts additional raw codes 5..=7, which remain [`Self::Unknown`]
-/// rather than acquiring unverified physical mode names. Unknown GET codes
-/// are preserved even when they fall outside that SET range.
+/// The names are legacy compatibility candidates, not guaranteed physical modes
+/// or device support. Both SET constructors accept codes 0..=7. Codes 5..=7 have
+/// explicit unknown variants without physical names. GET preserves every other
+/// byte without applying SET bounds; internal implementation mappings are unspecified.
+/// The two parameters remain independent and have different GET error behavior.
+///
+/// ```
+/// use unofficial_osmo_camera::protocol::{
+///     encode,
+///     commands::camera::cmd_02_8e_parameters::{
+///         CameraStabilizationMode, EisValue, LiveViewEisValue, Set,
+///     },
+/// };
+///
+/// let mode = CameraStabilizationMode::RockSteady;
+/// let recording = Set::new(EisValue::new(mode)?);
+/// let preview = Set::new(LiveViewEisValue::new(mode)?);
+/// assert_eq!(encode(&recording)?, [2, 0x8e, 1, 1, 8, 0, 1, 1]);
+/// assert_eq!(encode(&preview)?, [2, 0x8e, 1, 1, 0x3e, 0, 1, 1]);
+/// # Ok::<(), unofficial_osmo_camera::Error>(())
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
 pub enum CameraStabilizationMode {
     #[brw(magic = 0u8)]
@@ -1362,22 +1394,27 @@ pub enum CameraStabilizationMode {
     RockSteadyPlus,
     #[brw(magic = 4u8)]
     HorizonBalancing,
+    #[brw(magic = 5u8)]
+    Unknown05,
+    #[brw(magic = 6u8)]
+    Unknown06,
+    #[brw(magic = 7u8)]
+    Unknown07,
+    /// Preserve other wire values; SET constructors reject codes above 7.
     Unknown(u8),
 }
 
 /// Derived orientation reported by camera parameter `0x0014`.
 ///
-/// The targeted Nano layout reports `[0, orientation_code, 0]`. This is not
-/// the internal lock/configured-orientation/shooting-orientation record:
-/// those inputs can be transformed before the reply is built. Codes 0..=3
-/// occur on the selected path; physical directions and degree mappings are
-/// unspecified. Other byte values remain representable.
+/// This codec retains the reserved bytes and raw orientation code. It does not
+/// expose a rotation lock or raw sensor reading. Physical directions and degree
+/// mappings are unspecified; every byte value remains representable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
 pub struct CameraRotationState {
-    /// Zero in the targeted layout; not a rotation-lock mode.
+    /// Preserved reserved byte, not a rotation-lock mode.
     pub reserved_before: u8,
     pub orientation_code: u8,
-    /// Zero in the targeted layout; not a raw sensor angle.
+    /// Preserved reserved byte, not a raw sensor angle.
     pub reserved_after: u8,
 }
 

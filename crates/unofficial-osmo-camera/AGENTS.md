@@ -39,4 +39,6 @@ cargo fmt --all -- --check
 
 BLE-enabled Linux checks require `libdbus-1-dev` and `pkg-config`.
 Preserve Rust 1.92 compatibility and independence from the GStreamer SDK.
-When APIs change, rebuild and test affected adapters too.
+When APIs change, rebuild and test affected adapters within the requested scope.
+Do not modify, rebuild or test Python bindings or alter Python environments
+unless explicitly requested; follow the root Python-work restriction.

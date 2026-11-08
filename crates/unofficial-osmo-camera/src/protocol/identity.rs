@@ -48,6 +48,8 @@ pub enum CommandSet {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
 pub enum CommonCommand {
+    #[brw(magic = 0x99u8)]
+    CapabilityTopics,
     #[brw(magic = 0x01u8)]
     ModuleVersion,
     #[brw(magic = 0x81u8)]
@@ -65,6 +67,8 @@ pub enum CommonCommand {
 pub enum CameraCommand {
     #[brw(magic = 0x18u8)]
     VideoFormatSet,
+    #[brw(magic = 0x19u8)]
+    VideoFormatGet,
     #[brw(magic = 0x0cu8)]
     Playback,
     #[brw(magic = 0x80u8)]
@@ -100,6 +104,9 @@ pub enum CameraCommand {
     Watermark,
     #[brw(magic = 0xe0u8)]
     Capabilities,
+    /// Camera expansion selectors; distinct from counted camera parameters.
+    #[brw(magic = 0xffu8)]
+    Expansion,
     Unknown(u8),
 }
 

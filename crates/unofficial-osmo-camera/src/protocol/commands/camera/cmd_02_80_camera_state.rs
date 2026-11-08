@@ -15,10 +15,8 @@ use std::mem::size_of;
 /// }
 /// ```
 ///
-/// At least four bytes are required by this prefix decoder. The full Nano
-/// layout is 60 bytes, with no leading command-status byte. It includes mode
-/// at offset 4, storage bytes at 5..=20, an opaque LE16 at 29, packed bytes at
-/// 32/33, eight opaque bytes at 49..=56 and a raw mode code at 57.
+/// At least four bytes are required by this prefix decoder; no leading
+/// command-status byte is consumed. All subsequent telemetry remains opaque.
 /// State bit 30 can be set for content-mode code 2 or 7; code 7 remains
 /// unknown to the legacy content-mode enum and must not be discarded.
 /// Counters, elapsed-time units and capture-mode meanings remain unspecified.
@@ -78,10 +76,10 @@ impl From<u8> for CameraContentMode {
     }
 }
 
-/// Legacy Nano capture-mode labels for raw payload offset 57.
+/// Legacy capture-mode labels for a raw one-byte code.
 ///
-/// These codes label a model-qualified candidate view; they do not establish
-/// that any mode is available for a particular firmware or current state.
+/// Model-scoped interpretations and availability live in the capability profiles.
+/// These labels do not establish availability for any firmware or current state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
 pub enum NanoCaptureMode {
     #[brw(magic = 0x00u8)]

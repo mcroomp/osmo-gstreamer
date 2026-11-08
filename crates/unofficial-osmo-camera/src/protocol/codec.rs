@@ -1,3 +1,5 @@
+//! Strict binary encoding and decoding boundaries.
+
 use crate::{Error, Result};
 use binrw::{BinRead, BinWrite, Endian};
 use std::{io::Cursor, sync::Arc};
@@ -56,7 +58,7 @@ mod tests {
                 cmd_02_4c_live_view_output_set::{LcdOutputFormat, LiveViewStreamFormat},
                 cmd_02_8e_parameters::{CameraFieldOfView, CameraStabilizationMode},
                 cmd_02_09_live_view_control::LiveViewControlAction,
-                cmd_02_18_video_format_set::{NanoVideoResolutionCode, VideoFrameRateCode},
+                cmd_02_18_video_format_set::{VideoFrameRateCode, VideoResolutionCode},
                 cmd_02_80_camera_state::NanoCaptureMode,
             },
             common::cmd_00_32_activation_status::ActivationState,
@@ -69,10 +71,11 @@ mod tests {
         identity::*,
         *,
     };
+    use std::{error::Error as _, fmt::Debug};
 
     fn assert_byte_codes<T>(valid: impl Fn(u8) -> bool)
     where
-        T: std::fmt::Debug,
+        T: Debug,
         for<'a> T: BinRead<Args<'a> = ()> + BinWrite<Args<'a> = ()>,
     {
         for byte in u8::MIN..=u8::MAX {
@@ -102,7 +105,7 @@ mod tests {
         assert_byte_codes::<PairingApproval>(|_| true);
         assert_byte_codes::<ActivationState>(|_| true);
         assert_byte_codes::<NanoCaptureMode>(|_| true);
-        assert_byte_codes::<NanoVideoResolutionCode>(|_| true);
+        assert_byte_codes::<VideoResolutionCode>(|_| true);
         assert_byte_codes::<VideoFrameRateCode>(|_| true);
         assert_byte_codes::<CameraFieldOfView>(|_| true);
         assert_byte_codes::<CameraStabilizationMode>(|_| true);
@@ -204,8 +207,6 @@ mod tests {
 
     #[test]
     fn attributes_override_endianness_and_codec_errors_retain_sources() {
-        use std::error::Error as _;
-
         #[derive(BinRead, BinWrite)]
         #[brw(big)]
         struct BigEndian(u16);

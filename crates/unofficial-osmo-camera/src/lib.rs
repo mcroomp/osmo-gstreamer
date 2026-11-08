@@ -5,12 +5,17 @@
 //! feature its explicitly approved preview startup can initialize over BLE when
 //! the saved LAN pairing port is unreachable. [`CameraConfig`] entry points
 //! remain LAN-only. Established-session failures never trigger reconnects.
+//! With `ble`, [`CameraProfile`] provides `connect_control_via_ble`: BLE
+//! preparation and verification, then saved-network association and one LAN
+//! control connection.
 //! Callers must authorize hardware operations and explicitly close sessions.
 
 #[cfg(feature = "ble")]
 pub mod ble;
 mod camera_profile;
 pub mod control;
+#[cfg(feature = "ble")]
+mod control_startup;
 mod error;
 mod installation_identity;
 pub mod preview;

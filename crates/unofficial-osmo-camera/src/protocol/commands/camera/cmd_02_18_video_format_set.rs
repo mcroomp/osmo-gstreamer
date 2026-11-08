@@ -5,7 +5,7 @@ use crate::{
     protocol::{CommandPacket, ExplorationRequest, Flags, identity::Endpoint},
 };
 use binrw::{BinRead, BinWrite};
-use std::time::Duration;
+use std::{io::Cursor, time::Duration};
 
 /// Encodes a recording-format request while preserving selected current fields.
 ///
@@ -21,7 +21,9 @@ use std::time::Duration;
 /// reply { bytes: [u8; remaining] | unspecified }
 /// ```
 ///
-/// No default format or read request is supplied. This type only encodes the
+/// No default format is supplied. Use `VideoFormatGet` in the sibling
+/// `cmd_02_19_video_format_get` module to obtain the current value.
+/// This type only encodes the
 /// five-byte request payload after the two-byte command prefix; framing and
 /// delivery are handled by the transport layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BinWrite)]
@@ -32,31 +34,162 @@ pub struct VideoFormatSet {
 
 const SPEED_RATIO_MASK: u16 = 0x003f;
 
-/// Lossless wire resolution identifier.
+/// All currently known recording-resolution identifiers, not a support list.
+///
+/// Size labels describe known dimensions, not availability on every model.
+/// Codes without established dimensions retain numeric names; all other values
+/// use the lossless `Unknown` fallback.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, BinRead, BinWrite)]
-#[repr(transparent)]
-pub struct VideoResolutionCode(pub u8);
+pub enum VideoResolutionCode {
+    #[brw(magic = 0u8)]
+    Size640x480,
+    #[brw(magic = 4u8)]
+    Size1280x720,
+    #[brw(magic = 8u8)]
+    Size1920x960,
+    #[brw(magic = 10u8)]
+    Size1920x1080,
+    #[brw(magic = 12u8)]
+    Size1920x1440,
+    #[brw(magic = 16u8)]
+    Size3840x2160,
+    #[brw(magic = 22u8)]
+    Size4096x2160,
+    #[brw(magic = 24u8)]
+    Size2704x1520,
+    #[brw(magic = 26u8)]
+    Size640x512,
+    #[brw(magic = 27u8)]
+    Size4608x2160,
+    #[brw(magic = 28u8)]
+    Size4608x2592,
+    #[brw(magic = 31u8)]
+    Size2720x1530,
+    #[brw(magic = 32u8)]
+    Size5280x2160,
+    #[brw(magic = 33u8)]
+    Size5280x2972,
+    #[brw(magic = 34u8)]
+    Size3840x1572,
+    #[brw(magic = 35u8)]
+    Size5760x3240,
+    #[brw(magic = 36u8)]
+    Size6016x3200,
+    #[brw(magic = 37u8)]
+    Size2048x1080,
+    #[brw(magic = 39u8)]
+    Size5120x2880,
+    #[brw(magic = 45u8)]
+    Size2688x1512,
+    #[brw(magic = 48u8)]
+    Size4000x3000,
+    #[brw(magic = 50u8)]
+    Size2880x1620,
+    #[brw(magic = 52u8)]
+    Size2720x2040,
+    #[brw(magic = 55u8)]
+    Size7680x4320,
+    #[brw(magic = 56u8)]
+    Size5472x3078,
+    #[brw(magic = 65u8)]
+    Size4096x3072,
+    #[brw(magic = 66u8)]
+    Size1080x1920,
+    #[brw(magic = 67u8)]
+    Size1512x2688,
+    #[brw(magic = 68u8)]
+    Size5472x3648,
+    #[brw(magic = 69u8)]
+    Size864x480,
+    #[brw(magic = 71u8)]
+    Code71,
+    #[brw(magic = 95u8)]
+    Size2688x2016,
+    #[brw(magic = 97u8)]
+    Size5120x2700,
+    #[brw(magic = 99u8)]
+    Code99,
+    #[brw(magic = 100u8)]
+    Size1280x1024,
+    #[brw(magic = 101u8)]
+    Size640x340,
+    #[brw(magic = 103u8)]
+    Size3840x2880,
+    /// Legacy sentinel label for wire code 253.
+    #[brw(magic = 253u8)]
+    Max,
+    /// Legacy sentinel label for wire code 254.
+    #[brw(magic = 254u8)]
+    Unset,
+    Unknown(u8),
+}
 
 impl From<u8> for VideoResolutionCode {
     fn from(value: u8) -> Self {
-        Self(value)
+        Self::read_le(&mut Cursor::new([value])).expect("resolution fallback accepts every byte")
     }
 }
 
 impl From<VideoResolutionCode> for u8 {
     fn from(value: VideoResolutionCode) -> Self {
-        value.0
+        value.wire()
     }
 }
 
 impl VideoResolutionCode {
-    pub const MAX: Self = Self(253);
+    pub const MAX: Self = Self::Max;
     /// Wire code 254.
-    pub const UNSET: Self = Self(254);
+    pub const UNSET: Self = Self::Unset;
+
+    /// Raw wire identifier, independent of any model's capabilities.
+    pub const fn wire(self) -> u8 {
+        match self {
+            Self::Size640x480 => 0,
+            Self::Size1280x720 => 4,
+            Self::Size1920x960 => 8,
+            Self::Size1920x1080 => 10,
+            Self::Size1920x1440 => 12,
+            Self::Size3840x2160 => 16,
+            Self::Size4096x2160 => 22,
+            Self::Size2704x1520 => 24,
+            Self::Size640x512 => 26,
+            Self::Size4608x2160 => 27,
+            Self::Size4608x2592 => 28,
+            Self::Size2720x1530 => 31,
+            Self::Size5280x2160 => 32,
+            Self::Size5280x2972 => 33,
+            Self::Size3840x1572 => 34,
+            Self::Size5760x3240 => 35,
+            Self::Size6016x3200 => 36,
+            Self::Size2048x1080 => 37,
+            Self::Size5120x2880 => 39,
+            Self::Size2688x1512 => 45,
+            Self::Size4000x3000 => 48,
+            Self::Size2880x1620 => 50,
+            Self::Size2720x2040 => 52,
+            Self::Size7680x4320 => 55,
+            Self::Size5472x3078 => 56,
+            Self::Size4096x3072 => 65,
+            Self::Size1080x1920 => 66,
+            Self::Size1512x2688 => 67,
+            Self::Size5472x3648 => 68,
+            Self::Size864x480 => 69,
+            Self::Code71 => 71,
+            Self::Size2688x2016 => 95,
+            Self::Size5120x2700 => 97,
+            Self::Code99 => 99,
+            Self::Size1280x1024 => 100,
+            Self::Size640x340 => 101,
+            Self::Size3840x2880 => 103,
+            Self::Max => 253,
+            Self::Unset => 254,
+            Self::Unknown(code) => code,
+        }
+    }
 
     /// Constant-time lookup for identifiers with known dimensions.
     pub fn info(self) -> Option<&'static VideoResolutionInfo> {
-        VIDEO_RESOLUTION_LOOKUP[usize::from(self.0)]
+        VIDEO_RESOLUTION_LOOKUP[usize::from(self.wire())]
     }
 }
 
@@ -70,76 +203,57 @@ pub struct VideoResolutionInfo {
     pub dimensions: Option<(u16, u16)>,
 }
 
-const fn resolution(code: u8, dimensions: Option<(u16, u16)>) -> VideoResolutionInfo {
-    VideoResolutionInfo {
-        code: VideoResolutionCode(code),
-        dimensions,
-    }
+const fn resolution(
+    code: VideoResolutionCode,
+    dimensions: Option<(u16, u16)>,
+) -> VideoResolutionInfo {
+    VideoResolutionInfo { code, dimensions }
 }
 
 /// Dimension entries keyed by wire identifier; ordering is not part of the protocol.
-pub static VIDEO_RESOLUTIONS: [VideoResolutionInfo; 35] = [
-    resolution(0, Some((640, 480))),
-    resolution(4, Some((1280, 720))),
-    resolution(8, Some((1920, 960))),
-    resolution(10, Some((1920, 1080))),
+pub static VIDEO_RESOLUTIONS: [VideoResolutionInfo; 37] = [
+    resolution(VideoResolutionCode::Size640x480, Some((640, 480))),
+    resolution(VideoResolutionCode::Size1280x720, Some((1280, 720))),
+    resolution(VideoResolutionCode::Size1920x960, Some((1920, 960))),
+    resolution(VideoResolutionCode::Size1920x1080, Some((1920, 1080))),
+    resolution(VideoResolutionCode::Size1920x1440, Some((1920, 1440))),
     // The selector conditions for this ID are unspecified.
-    resolution(16, Some((3840, 2160))),
+    resolution(VideoResolutionCode::Size3840x2160, Some((3840, 2160))),
     // The selector conditions for this ID are unspecified.
-    resolution(22, Some((4096, 2160))),
-    resolution(24, Some((2704, 1520))),
-    resolution(26, Some((640, 512))),
-    resolution(27, Some((4608, 2160))),
-    resolution(28, Some((4608, 2592))),
-    resolution(31, Some((2720, 1530))),
-    resolution(32, Some((5280, 2160))),
-    resolution(33, Some((5280, 2972))),
-    resolution(34, Some((3840, 1572))),
-    resolution(35, Some((5760, 3240))),
-    resolution(36, Some((6016, 3200))),
-    resolution(37, Some((2048, 1080))),
-    resolution(39, Some((5120, 2880))),
-    resolution(45, Some((2688, 1512))),
-    resolution(48, Some((4000, 3000))),
-    resolution(50, Some((2880, 1620))),
-    resolution(52, Some((2720, 2040))),
-    resolution(55, Some((7680, 4320))),
-    resolution(56, Some((5472, 3078))),
-    resolution(65, Some((4096, 3072))),
-    resolution(66, Some((1080, 1920))),
-    resolution(67, Some((1512, 2688))),
-    resolution(68, Some((5472, 3648))),
-    resolution(69, Some((864, 480))),
+    resolution(VideoResolutionCode::Size4096x2160, Some((4096, 2160))),
+    resolution(VideoResolutionCode::Size2704x1520, Some((2704, 1520))),
+    resolution(VideoResolutionCode::Size640x512, Some((640, 512))),
+    resolution(VideoResolutionCode::Size4608x2160, Some((4608, 2160))),
+    resolution(VideoResolutionCode::Size4608x2592, Some((4608, 2592))),
+    resolution(VideoResolutionCode::Size2720x1530, Some((2720, 1530))),
+    resolution(VideoResolutionCode::Size5280x2160, Some((5280, 2160))),
+    resolution(VideoResolutionCode::Size5280x2972, Some((5280, 2972))),
+    resolution(VideoResolutionCode::Size3840x1572, Some((3840, 1572))),
+    resolution(VideoResolutionCode::Size5760x3240, Some((5760, 3240))),
+    resolution(VideoResolutionCode::Size6016x3200, Some((6016, 3200))),
+    resolution(VideoResolutionCode::Size2048x1080, Some((2048, 1080))),
+    resolution(VideoResolutionCode::Size5120x2880, Some((5120, 2880))),
+    resolution(VideoResolutionCode::Size2688x1512, Some((2688, 1512))),
+    resolution(VideoResolutionCode::Size4000x3000, Some((4000, 3000))),
+    resolution(VideoResolutionCode::Size2880x1620, Some((2880, 1620))),
+    resolution(VideoResolutionCode::Size2720x2040, Some((2720, 2040))),
+    resolution(VideoResolutionCode::Size7680x4320, Some((7680, 4320))),
+    resolution(VideoResolutionCode::Size5472x3078, Some((5472, 3078))),
+    resolution(VideoResolutionCode::Size4096x3072, Some((4096, 3072))),
+    resolution(VideoResolutionCode::Size1080x1920, Some((1080, 1920))),
+    resolution(VideoResolutionCode::Size1512x2688, Some((1512, 2688))),
+    resolution(VideoResolutionCode::Size5472x3648, Some((5472, 3648))),
+    resolution(VideoResolutionCode::Size864x480, Some((864, 480))),
     // The code label does not establish exact dimensions.
-    resolution(71, None),
-    resolution(95, Some((2688, 2016))),
-    resolution(97, Some((5120, 2700))),
+    resolution(VideoResolutionCode::Code71, None),
+    resolution(VideoResolutionCode::Size2688x2016, Some((2688, 2016))),
+    resolution(VideoResolutionCode::Size5120x2700, Some((5120, 2700))),
     // The code label does not establish exact dimensions.
-    resolution(99, None),
-    resolution(100, Some((1280, 1024))),
-    resolution(101, Some((640, 340))),
+    resolution(VideoResolutionCode::Code99, None),
+    resolution(VideoResolutionCode::Size1280x1024, Some((1280, 1024))),
+    resolution(VideoResolutionCode::Size640x340, Some((640, 340))),
+    resolution(VideoResolutionCode::Size3840x2880, Some((3840, 2880))),
 ];
-
-/// Source-labelled Nano video-resolution identifiers.
-///
-/// Labels are model-specific external candidates; exact dimensions and
-/// device/mode support are not encoded here.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BinRead, BinWrite)]
-pub enum NanoVideoResolutionCode {
-    #[brw(magic = 0x10u8)]
-    Uhd4k16By9,
-    #[brw(magic = 0x2du8)]
-    Qhd2700p16By9,
-    #[brw(magic = 0x0au8)]
-    FullHd1080p16By9,
-    #[brw(magic = 0x67u8)]
-    Uhd4k4By3,
-    #[brw(magic = 0x5fu8)]
-    Qhd2700p4By3,
-    #[brw(magic = 0x0cu8)]
-    FullHd1080p4By3,
-    Unknown(u8),
-}
 
 const RESOLUTION_ID_COUNT: usize = u8::MAX as usize + 1;
 static VIDEO_RESOLUTION_LOOKUP: [Option<&VideoResolutionInfo>; RESOLUTION_ID_COUNT] =
@@ -151,11 +265,11 @@ const fn build_resolution_lookup() -> [Option<&'static VideoResolutionInfo>; RES
     while index < VIDEO_RESOLUTIONS.len() {
         let entry = &VIDEO_RESOLUTIONS[index];
         assert!(
-            entry.code.0 != VideoResolutionCode::MAX.0
-                && entry.code.0 != VideoResolutionCode::UNSET.0,
+            entry.code.wire() != VideoResolutionCode::MAX.wire()
+                && entry.code.wire() != VideoResolutionCode::UNSET.wire(),
             "sentinel in resolution table"
         );
-        let id = entry.code.0 as usize;
+        let id = entry.code.wire() as usize;
         assert!(lookup[id].is_none(), "duplicate resolution wire ID");
         lookup[id] = Some(entry);
         index += 1;
@@ -257,16 +371,6 @@ pub struct VideoFormat {
     pub options: VideoFormatOptions,
 }
 
-impl VideoFormat {
-    /// Return byte 4 as the Nano slow-motion factor candidate.
-    ///
-    /// Call only for a Nano slow-motion format. Other models place this field
-    /// differently, and this value does not validate the mode or format.
-    pub fn nano_slow_motion_factor(self) -> u8 {
-        (self.options.0 >> 8) as u8
-    }
-}
-
 impl VideoFormatSet {
     /// Changes resolution/rate, preserving current FOV and all option bits.
     pub fn from_current(
@@ -291,6 +395,12 @@ impl VideoFormatSet {
     pub fn with_speed_ratio_code(mut self, code: u8) -> Result<Self> {
         self.format.options = self.format.options.with_speed_ratio_code(code)?;
         Ok(self)
+    }
+
+    /// Replace raw options without applying any model's interpretation or limits.
+    pub fn with_options(mut self, options: VideoFormatOptions) -> Self {
+        self.format.options = options;
+        self
     }
 
     pub fn format(&self) -> VideoFormat {
@@ -324,7 +434,7 @@ mod tests {
     use std::fmt::Debug;
 
     const CURRENT: [u8; 5] = [0x16, 0x03, 0xa5, 0xff, 0x93];
-    const TARGET: VideoResolutionCode = VideoResolutionCode(0x65);
+    const TARGET: VideoResolutionCode = VideoResolutionCode::Size640x340;
 
     fn current() -> VideoFormat {
         decode::<VideoFormat>(&CURRENT, ()).unwrap()
@@ -346,7 +456,7 @@ mod tests {
         for code in u8::MIN..=u8::MAX {
             let bytes = [code, code, code, 0x34, 0x12];
             let format = decode::<VideoFormat>(&bytes, ()).unwrap();
-            assert_eq!(format.resolution.0, code);
+            assert_eq!(format.resolution.wire(), code);
             assert_eq!(encode(&format.frame_rate).unwrap(), [code]);
             assert_eq!(format.fov.0, code);
             assert_eq!(format.options.0, 0x1234);
@@ -368,10 +478,36 @@ mod tests {
         }
 
         for code in u8::MIN..=u8::MAX {
-            assert_byte_round_trip(VideoResolutionCode(code), code);
+            let resolution = VideoResolutionCode::from(code);
+            assert_byte_round_trip(resolution, code);
+            assert_eq!(resolution.wire(), code);
+            assert_eq!(u8::from(resolution), code);
             assert_byte_round_trip(decode::<VideoFrameRateCode>(&[code], ()).unwrap(), code);
             assert_byte_round_trip(VideoFovCode(code), code);
         }
+    }
+
+    #[test]
+    fn named_resolution_variants_cover_the_catalog_and_preserve_unknown_codes() {
+        assert_eq!(VIDEO_RESOLUTIONS.len(), 37);
+        for byte in u8::MIN..=u8::MAX {
+            let code = VideoResolutionCode::from(byte);
+            let entry = VIDEO_RESOLUTIONS
+                .iter()
+                .find(|entry| entry.code.wire() == byte);
+            assert_eq!(code.info(), entry);
+            match (entry, byte) {
+                (Some(entry), _) => {
+                    assert_eq!(code, entry.code);
+                    assert!(!matches!(code, VideoResolutionCode::Unknown(_)));
+                }
+                (None, 253) => assert_eq!(code, VideoResolutionCode::Max),
+                (None, 254) => assert_eq!(code, VideoResolutionCode::Unset),
+                (None, _) => assert_eq!(code, VideoResolutionCode::Unknown(byte)),
+            }
+        }
+        assert_eq!(VideoResolutionCode::Code71.info().unwrap().dimensions, None);
+        assert_eq!(VideoResolutionCode::Code99.info().unwrap().dimensions, None);
     }
 
     #[test]
@@ -385,17 +521,6 @@ mod tests {
         assert!(decode::<VideoFormatOptions>(&[], ()).is_err());
         assert!(decode::<VideoFormatOptions>(&[0x34], ()).is_err());
         assert!(decode::<VideoFormatOptions>(&[0x34, 0x12, 0], ()).is_err());
-    }
-
-    #[test]
-    fn nano_resolution_labels_and_slow_motion_factor_remain_model_qualified() {
-        let nano_format = decode::<VideoFormat>(&[0x10, 0x08, 0, 0, 4], ()).unwrap();
-        assert_eq!(nano_format.nano_slow_motion_factor(), 4);
-        assert_eq!(encode(&nano_format).unwrap(), [0x10, 0x08, 0, 0, 4]);
-
-        let other_layout = decode::<VideoFormat>(&[0x10, 0x08, 0, 8, 0], ()).unwrap();
-        assert_eq!(other_layout.nano_slow_motion_factor(), 0);
-        assert_eq!(encode(&other_layout).unwrap(), [0x10, 0x08, 0, 8, 0]);
     }
 
     #[test]
@@ -434,6 +559,21 @@ mod tests {
             CommandPacket::payload(&set.with_speed_ratio_code(0x02).unwrap()).unwrap(),
             [0x65, 0x0e, 0xa5, 0xc2, 0x93]
         );
+    }
+
+    #[test]
+    fn raw_options_accept_all_bits_without_model_limits_and_preserve_other_fields() {
+        let set =
+            VideoFormatSet::from_current(current(), TARGET, VideoFrameRateCode::Fps120000Over1001);
+        for word in u16::MIN..=u16::MAX {
+            let bytes = word.to_le_bytes();
+            let updated = set.with_options(VideoFormatOptions(word));
+            assert_eq!(
+                updated.payload().unwrap(),
+                [0x65, 7, 0xa5, bytes[0], bytes[1]]
+            );
+            assert_eq!(updated.format().options.0, word);
+        }
     }
 
     #[test]
