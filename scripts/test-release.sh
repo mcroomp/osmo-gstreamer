@@ -155,6 +155,7 @@ export -f gst-inspect-1.0 rustc
 export TEST_LIBRARY
 printf 'Synthetic MIT license\n' > LICENSE
 printf 'Synthetic README\n' > README.md
+printf 'Synthetic protocol notes\n' > PROTOCOL.md
 printf 'Synthetic notices\n' > dist/THIRD-PARTY-LICENSES.txt
 for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin; do
     case "$target" in
@@ -168,7 +169,7 @@ for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-da
     bash "$scripts/package-native-release.sh" "$version" "$target"
     name="osmo-gstreamer-$version-$target"
     tar -tzf "dist/$name.tar.gz" > "$temp/archive.log"
-    for entry in "lib/$TEST_LIBRARY" bin/osmo-pair LICENSE README.md THIRD-PARTY-LICENSES.txt BUILD-INFO.txt; do
+    for entry in "lib/$TEST_LIBRARY" bin/osmo-pair LICENSE README.md PROTOCOL.md THIRD-PARTY-LICENSES.txt BUILD-INFO.txt; do
         grep -Fxq "$name/$entry" "$temp/archive.log"
     done
     case "$OSTYPE" in

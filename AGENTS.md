@@ -12,6 +12,13 @@ component instructions before editing:
 Component rules supplement these rules; they cannot relax publication,
 provenance or safety requirements. Use [README.md](README.md) for build commands.
 
+## Alpha API documentation
+
+- The public APIs are still alpha. Document current contracts and usage rather
+  than maintaining API migration tables or historical rename guides.
+- Do not add migration tables or rename histories unless explicitly requested.
+  Preserve wire-contract details, provenance and model/firmware limitations.
+
 ## Python work requires an explicit request
 
 - Do not modify the Python wrapper, its Rust bindings, stubs, dependencies,

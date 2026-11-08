@@ -18,7 +18,7 @@ $library = 'gstosmo.dll'
 $executable = 'osmo-pair.exe'
 Copy-Item (Join-Path $build $library) (Join-Path $stage 'lib')
 Copy-Item (Join-Path $build $executable) (Join-Path $stage 'bin')
-Copy-Item 'LICENSE', 'README.md' $stage
+Copy-Item 'LICENSE', 'README.md', 'PROTOCOL.md' $stage
 Copy-Item (Join-Path 'dist' 'THIRD-PARTY-LICENSES.txt') $stage
 
 $env:GST_PLUGIN_PATH = (Resolve-Path (Join-Path $stage 'lib')).Path

@@ -24,7 +24,7 @@ fi
 mkdir -p "$stage/lib" "$stage/bin"
 cp "target/$target/release/$library" "$stage/lib/"
 cp "target/$target/release/osmo-pair" "$stage/bin/"
-cp LICENSE README.md dist/THIRD-PARTY-LICENSES.txt "$stage/"
+cp LICENSE README.md PROTOCOL.md dist/THIRD-PARTY-LICENSES.txt "$stage/"
 export GST_PLUGIN_PATH
 GST_PLUGIN_PATH=$(cd "$stage/lib" && pwd -P)
 registry_dir=$(mktemp -d)
