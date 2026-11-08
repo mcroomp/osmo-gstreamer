@@ -28,8 +28,8 @@ pub struct CameraAeLockGet;
 ///         code: u8, extension: [u8; remaining] | opaque }
 /// ```
 ///
-/// The Nano reply retains bits 0..5 and clears bits 6..7. Values are raw
-/// codes: neither nonzero nor the low two bits establish a lock-state enum.
+/// Values are raw codes: neither nonzero nor the low two bits establish a
+/// lock-state enum.
 /// The decoder retains all received bits unchanged.
 #[binrw]
 #[derive(Clone, Debug, PartialEq, Eq)]

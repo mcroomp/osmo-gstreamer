@@ -38,7 +38,7 @@ const WATERMARK_PHOTOS_MASK: u8 = 0x01;
 const WATERMARK_VIDEOS_MASK: u8 = 0x02;
 const WATERMARK_LIVE_VIEW_MASK: u8 = 0x04;
 
-/// Accepted Nano format-2 watermark metadata after a successful status.
+/// Accepted format-2 watermark layout after a successful status.
 ///
 /// Sequential data: `flags: le_u16, length: le_u16, opaque: u8,
 /// value: [u8; length]`, then any retained trailing bytes.

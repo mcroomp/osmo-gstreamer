@@ -19,7 +19,7 @@ use binrw::{BinWrite, binrw};
 #[bw(magic = b"\x02\x2b")]
 pub struct CameraUserIsoGet;
 
-/// Legacy Nano user-ISO labels; numeric ISO meanings are not confirmed here.
+/// Legacy user-ISO labels; numeric ISO meanings are not confirmed here.
 ///
 /// The wire code remains available from [`CameraUserIsoReply::code`]. These labels
 /// do not describe ISO-limit parameter `0x000F` or establish mode support.
@@ -67,7 +67,7 @@ impl NanoUserIso {
 ///         extension: [u8; remaining] | opaque }
 /// ```
 ///
-/// The legacy Nano labels are a candidate interpretation only. Unknown
+/// The legacy labels are a candidate interpretation only. Unknown
 /// codes remain available through `code`, and aliases remain distinct there.
 #[binrw]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,7 +88,7 @@ impl CameraUserIsoReply {
         self.raw_bytes()[0]
     }
 
-    /// Apply the legacy Nano label mapping; the raw code is retained.
+    /// Apply the legacy label mapping; the raw code is retained.
     ///
     /// Aliases are not evidence of physical sensitivity or supported settings.
     /// Use `code` when those meanings have not been independently established.

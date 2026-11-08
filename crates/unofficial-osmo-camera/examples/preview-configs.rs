@@ -1,7 +1,14 @@
+//! Compare explicitly requested live-preview settings using a single camera owner.
+
+use env_logger::{Builder as LoggerBuilder, Env};
 use std::{
+    env::args,
     error::Error,
     io::Write,
+    mem::take,
+    path::Path,
     process::{Command as Process, Stdio},
+    result::Result as StdResult,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -9,23 +16,22 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use unofficial_osmo_camera::protocol::encode;
 use unofficial_osmo_camera::{
-    AccessUnit, CameraProfile, CameraSession, Error as CameraError,
+    AccessUnit, CameraProfile, CameraSession, Error as CameraError, Result as CameraResult,
     protocol::{
-        ExplorationRequest, Flags,
+        CommandPacket, ExplorationRequest, Flags,
         commands::camera::{
             cmd_02_1a_live_view_quality_set::{LiveViewQuality, LiveViewQualitySet},
             cmd_02_4c_live_view_output_set::{LiveViewStreamFormat, LiveViewStreamOutputSet},
         },
-        identity::{CameraCommand, Command, Endpoint},
+        identity::Endpoint,
     },
 };
 
 const SAMPLE: Duration = Duration::from_secs(8);
 const SETTLE: Duration = Duration::from_secs(2);
 const MAX_PROBE_BYTES: usize = 4 * 1024 * 1024;
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+type Result<T> = StdResult<T, Box<dyn Error>>;
 
 #[derive(Default)]
 struct Measurements {
@@ -39,7 +45,7 @@ struct Measurements {
 }
 
 impl Measurements {
-    fn observe(&mut self, unit: AccessUnit) -> unofficial_osmo_camera::Result<()> {
+    fn observe(&mut self, unit: AccessUnit) -> CameraResult<()> {
         if self.start.is_none_or(|start| unit.received_at < start) {
             return Ok(());
         }
@@ -75,7 +81,7 @@ impl Measurements {
 }
 
 fn main() -> Result<()> {
-    let args: Vec<_> = std::env::args().skip(1).collect();
+    let args: Vec<_> = args().skip(1).collect();
     if !(args.len() == 2 || args.len() == 3 && args[2] == "--remaining-output-only")
         || args[1] != "--approve-experimental-writes"
     {
@@ -90,8 +96,7 @@ fn main() -> Result<()> {
     if !available.success() {
         return Err("ffprobe is not available".into());
     }
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
-        .try_init()?;
+    LoggerBuilder::from_env(Env::default().default_filter_or("warn")).try_init()?;
     eprintln!(
         "EXPERIMENT: request flags 0x40, not a verified write contract. Reply bytes are NOT interpreted as acceptance."
     );
@@ -105,7 +110,7 @@ fn main() -> Result<()> {
         );
     }
     eprintln!("One owner; no LCD/recording writes; no video files; stop on transport errors.");
-    let path = std::path::Path::new(".credentials").join(format!("{}.toml", args[0]));
+    let path = Path::new(".credentials").join(format!("{}.toml", args[0]));
     let mut profile = CameraProfile::from_file(&path)?;
     let mut session = profile.start_preview(true, &Default::default())?;
     if let Err(error) = profile.save_to_file(&path) {
@@ -122,7 +127,7 @@ fn main() -> Result<()> {
     let worker_stop = stop.clone();
     let data = Arc::new(Mutex::new(Measurements::default()));
     let worker_data = data.clone();
-    let drain = thread::spawn(move || -> unofficial_osmo_camera::Result<()> {
+    let drain = thread::spawn(move || -> CameraResult<()> {
         while !worker_stop.load(Ordering::Acquire) {
             match reader.receive_timeout(Duration::from_millis(100)) {
                 Ok(Some(unit)) => worker_data
@@ -169,11 +174,7 @@ fn main() -> Result<()> {
 fn remaining_trials(session: &mut CameraSession, data: &Arc<Mutex<Measurements>>) -> Result<()> {
     measure("new baseline; current settings unknown", data)?;
     for format in [LiveViewStreamFormat::SdHf, LiveViewStreamFormat::HdHf] {
-        apply(
-            session,
-            CameraCommand::LiveViewOutputSet,
-            encode(&LiveViewStreamOutputSet { format })?,
-        )?;
+        apply(session, &LiveViewStreamOutputSet { format })?;
         measure(
             &format!("quality unchanged; output={format:?} requested"),
             data,
@@ -189,11 +190,7 @@ fn trials(session: &mut CameraSession, data: &Arc<Mutex<Measurements>>) -> Resul
         LiveViewQuality::Fine,
         LiveViewQuality::SuperFine,
     ] {
-        apply(
-            session,
-            CameraCommand::LiveViewQualitySet,
-            encode(&LiveViewQualitySet { quality })?,
-        )?;
+        apply(session, &LiveViewQualitySet { quality })?;
         measure(
             &format!("quality={quality:?}; original output unknown"),
             data,
@@ -201,10 +198,9 @@ fn trials(session: &mut CameraSession, data: &Arc<Mutex<Measurements>>) -> Resul
     }
     apply(
         session,
-        CameraCommand::LiveViewQualitySet,
-        encode(&LiveViewQualitySet {
+        &LiveViewQualitySet {
             quality: LiveViewQuality::Normal,
-        })?,
+        },
     )?;
     for format in [
         LiveViewStreamFormat::Auto,
@@ -213,11 +209,7 @@ fn trials(session: &mut CameraSession, data: &Arc<Mutex<Measurements>>) -> Resul
         LiveViewStreamFormat::SdHf,
         LiveViewStreamFormat::HdHf,
     ] {
-        apply(
-            session,
-            CameraCommand::LiveViewOutputSet,
-            encode(&LiveViewStreamOutputSet { format })?,
-        )?;
+        apply(session, &LiveViewStreamOutputSet { format })?;
         measure(
             &format!("quality=Normal requested; output={format:?}"),
             data,
@@ -225,10 +217,9 @@ fn trials(session: &mut CameraSession, data: &Arc<Mutex<Measurements>>) -> Resul
     }
     apply(
         session,
-        CameraCommand::LiveViewOutputSet,
-        encode(&LiveViewStreamOutputSet {
+        &LiveViewStreamOutputSet {
             format: LiveViewStreamFormat::Auto,
-        })?,
+        },
     )?;
     measure(
         "final Normal/Auto requested; not verified restoration",
@@ -236,22 +227,24 @@ fn trials(session: &mut CameraSession, data: &Arc<Mutex<Measurements>>) -> Resul
     )
 }
 
-fn apply(session: &mut CameraSession, command: CameraCommand, payload: Vec<u8>) -> Result<()> {
+fn preview_request(packet: &impl CommandPacket) -> CameraResult<ExplorationRequest> {
+    Ok(ExplorationRequest {
+        receiver: Endpoint::Camera,
+        command: packet.command(),
+        flags: Flags::REQUEST,
+        payload: packet.payload()?,
+        timeout: Duration::from_secs(3),
+    })
+}
+
+fn apply(session: &mut CameraSession, packet: &impl CommandPacket) -> Result<()> {
+    let request = preview_request(packet)?;
+    let command = request.command;
     println!(
         "REQUEST command={command:?} flags=0x40 payload_bytes={}",
-        payload.len()
+        request.payload.len()
     );
-    let reply = session.request_raw(
-        ExplorationRequest {
-            receiver: Endpoint::Camera,
-            command: Command::Camera(command),
-            flags: Flags::REQUEST,
-            payload,
-            timeout: Duration::from_secs(3),
-        },
-        true,
-        true,
-    )?;
+    let reply = session.request_raw(request, true, true)?;
     println!(
         "REPLY command={command:?} flags={:#04x} payload_bytes={} first_byte={:?} (uninterpreted)",
         reply.flags.0,
@@ -270,7 +263,7 @@ fn measure(label: &str, data: &Arc<Mutex<Measurements>>) -> Result<()> {
         ..Default::default()
     };
     thread::sleep(SAMPLE);
-    let measured = std::mem::take(
+    let measured = take(
         &mut *data
             .lock()
             .map_err(|_| "diagnostic measurements poisoned")?,
@@ -349,7 +342,56 @@ fn probe(bytes: &[u8]) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{decode, encode};
+    use unofficial_osmo_camera::protocol::{
+        encode,
+        identity::{CameraCommand, Command},
+    };
+
+    fn check_request(packet: &impl CommandPacket, command: CameraCommand, payload: &[u8]) {
+        let request = preview_request(packet).unwrap();
+        assert_eq!(request.receiver, Endpoint::Camera);
+        assert_eq!(request.command, Command::Camera(command));
+        assert_eq!(request.flags, Flags::REQUEST);
+        assert_eq!(request.timeout, Duration::from_secs(3));
+        assert_eq!(request.payload, payload);
+        assert!(!request.is_known_read());
+        assert!(request.validate(false, false).is_err());
+        request.validate(true, true).unwrap();
+        let (set, id) = Command::Camera(command).wire();
+        let expected = [[set, id].as_slice(), payload].concat();
+        assert_eq!(
+            encode(&request.message(0x1234).command_body()).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn diagnostic_requests_encode_quality_and_output_prefixes_exactly_once() {
+        for (quality, code) in [
+            (LiveViewQuality::Normal, 0),
+            (LiveViewQuality::Fine, 1),
+            (LiveViewQuality::SuperFine, 2),
+        ] {
+            check_request(
+                &LiveViewQualitySet { quality },
+                CameraCommand::LiveViewQualitySet,
+                &[code],
+            );
+        }
+        for (format, code) in [
+            (LiveViewStreamFormat::Auto, 0),
+            (LiveViewStreamFormat::SdSf, 1),
+            (LiveViewStreamFormat::HdSf, 2),
+            (LiveViewStreamFormat::SdHf, 3),
+            (LiveViewStreamFormat::HdHf, 4),
+        ] {
+            check_request(
+                &LiveViewStreamOutputSet { format },
+                CameraCommand::LiveViewOutputSet,
+                &[4, 0, 0, code, 0, 0x20],
+            );
+        }
+    }
 
     #[test]
     fn delivered_fps_excludes_startup_and_does_not_use_nominal_caps() {

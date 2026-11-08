@@ -36,8 +36,8 @@ pub struct CameraPhotoIntervalGet;
 ///         extension: [u8; remaining] | opaque }
 /// ```
 ///
-/// One Nano variant emits `00 01` followed by a raw LE32 value. Another
-/// supplies all six bytes directly. The low/high halfword views are not
+/// The decoder preserves the six-byte prefix without interpreting its origin.
+/// The low/high halfword views are not
 /// confirmed independent coarse/fine durations, and byte 1 is not a
 /// confirmed photo count. No time units are assigned.
 #[binrw]

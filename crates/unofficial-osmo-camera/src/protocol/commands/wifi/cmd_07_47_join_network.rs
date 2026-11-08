@@ -19,7 +19,7 @@ use std::fmt::{Debug, Formatter, Result as FmtResult};
 /// reply { status: u8, extension: [u8; remaining] | opaque }
 /// ```
 ///
-/// The Nano request accepts 1..=32 encoded SSID bytes and either an empty
+/// This encoder accepts 1..=32 encoded SSID bytes and either an empty
 /// password or 8..=63 encoded password bytes. Limits count bytes, not characters.
 /// Length prefixes do not include a terminating NUL.
 ///

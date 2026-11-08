@@ -1,3 +1,5 @@
+//! Typed reads with command-matched replies and bounded timeouts.
+
 use super::{CommandPacket, Flags, Message, MessageContext, identity::Endpoint};
 use crate::{Error, Result};
 use binrw::{BinRead, meta::ReadMagic};
@@ -45,20 +47,29 @@ pub trait Query: CommandPacket + Default + Sized {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::identity::Command;
     use crate::protocol::{
-        DUML_COMMAND, DUML_SET, MIN_ID,
+        DUML_COMMAND, DUML_SET, MIN_ID, MessageContext,
         commands::{
             camera::{
                 cmd_02_8e_parameters::{EisValue, Get},
                 cmd_02_e0_capabilities_get::EiRangeGet,
+                *,
             },
-            common::cmd_00_01_module_version_get::CameraModuleVersionGet,
-            wifi::cmd_07_39_get_role::WifiRoleGet,
+            common::{
+                cmd_00_01_module_version_get::CameraModuleVersionGet,
+                cmd_00_2b_session_keepalive::{
+                    SessionKeepaliveOpenRequest, SessionKeepaliveRequest,
+                },
+                *,
+            },
+            media::*,
+            reply::CommandReadReply,
+            wifi::{cmd_07_39_get_role::WifiRoleGet, *},
         },
+        decode, encode,
+        identity::Command,
     };
-    use crate::protocol::{decode, encode};
-    use binrw::meta::WriteMagic;
+    use binrw::{BinWrite, meta::WriteMagic};
 
     fn check_frame<Q: Query>(query: Q, expected_command: Command, expected_payload: &[u8]) {
         let typed = query.request(MIN_ID).unwrap();
@@ -74,7 +85,7 @@ mod tests {
 
     fn check_reply_magic<Q: Query>()
     where
-        Q::Response: for<'a> binrw::BinWrite<Args<'a> = ()> + WriteMagic<MagicType = [u8; 2]>,
+        Q::Response: for<'a> BinWrite<Args<'a> = ()> + WriteMagic<MagicType = [u8; 2]>,
     {
         assert_eq!(Q::COMMAND_ID, <Q::Response as ReadMagic>::MAGIC);
         assert_eq!(Q::COMMAND_ID, <Q::Response as WriteMagic>::MAGIC);
@@ -106,8 +117,8 @@ mod tests {
 
     #[test]
     fn every_get_reply_pair_owns_matching_command_only_magic() {
-        use crate::protocol::commands::{camera::*, common::*, media::*, wifi::*};
         check_reply_magic::<cmd_00_01_module_version_get::CameraModuleVersionGet>();
+        check_reply_magic::<cmd_02_19_video_format_get::VideoFormatGet>();
         check_reply_magic::<cmd_02_29_user_shutter_get::CameraUserShutterGet>();
         check_reply_magic::<cmd_02_2b_user_iso_get::CameraUserIsoGet>();
         check_reply_magic::<cmd_02_4b_photo_interval_get::CameraPhotoIntervalGet>();
@@ -149,12 +160,6 @@ mod tests {
 
     #[test]
     fn command_magic_is_only_identity_and_context_controls_header_not_payload() {
-        use crate::protocol::{
-            MessageContext,
-            commands::common::cmd_00_2b_session_keepalive::{
-                SessionKeepaliveOpenRequest, SessionKeepaliveRequest,
-            },
-        };
         assert_eq!(<EiRangeGet as WriteMagic>::MAGIC, [2, 0xe0]);
         assert_eq!(<SessionKeepaliveRequest as WriteMagic>::MAGIC, [0, 0x2b]);
         assert_eq!(
@@ -218,7 +223,7 @@ mod tests {
         reply.payload = vec![0xe3, 0xaa];
         assert!(matches!(
             query.decode_reply(&reply).unwrap(),
-            crate::protocol::commands::reply::CommandReadReply::Rejected { .. }
+            CommandReadReply::Rejected { .. }
         ));
         reply.command = WifiRoleGet::default().command();
         assert!(query.decode_reply(&reply).is_err());

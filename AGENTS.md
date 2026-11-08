@@ -12,6 +12,18 @@ component instructions before editing:
 Component rules supplement these rules; they cannot relax publication,
 provenance or safety requirements. Use [README.md](README.md) for build commands.
 
+## Python work requires an explicit request
+
+- Do not modify the Python wrapper, its Rust bindings, stubs, dependencies,
+  manifests or lockfiles unless the user explicitly requests Python work.
+- Do not run Python builds, tests, package installation or environment setup
+  as part of Rust/GStreamer work. This includes `uv sync`, `maturin develop`
+  and recreating, replacing or deleting the shared `.venv` or other Python
+  environments.
+- Rust API changes do not authorize Python adapter updates or validation.
+  Report any Python compatibility concern without touching Python, and wait
+  for an explicit request. This overrides routine adapter-rebuild instructions.
+
 ## Unofficial, compatibility-only project
 
 - This is an independent, unofficial interoperability project. It is not
@@ -84,7 +96,8 @@ provenance or safety requirements. Use [README.md](README.md) for build commands
 - Prefer Bash shell scripts and CI steps. Use PowerShell only for operations
   that require Windows-specific tooling.
 
-- Use the pinned Rust toolchain and uv for Python. The Python project uses the
+- Use the pinned Rust toolchain and, for explicitly requested Python work, uv.
+  The Python project uses the
   named Microsoft package feed; do not silently switch indexes, disable TLS
   verification or add unreviewed package sources.
 - Keep Cargo and uv lockfiles checked in and consistent; normal CI/builds use

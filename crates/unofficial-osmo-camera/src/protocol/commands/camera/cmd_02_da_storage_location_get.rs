@@ -29,7 +29,7 @@ pub struct CameraStorageLocationGet {
     payload: &'static [u8],
 }
 
-/// Accepted Nano storage list after a successful status.
+/// Accepted storage-list layout after a successful status.
 ///
 /// Sequential data: `zero[3], count: u8, zero: u8, entries: [u8; count]`.
 /// Count is 1..=4. The selected storage is always the first entry; available

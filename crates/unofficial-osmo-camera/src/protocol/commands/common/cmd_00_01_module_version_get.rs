@@ -54,9 +54,8 @@ impl Query for CameraModuleVersionGet {
 ///
 /// At least 25 accepted-body bytes are required. `firmware()` returns the
 /// four version bytes in reverse wire order; `BinWrite` preserves wire order.
-/// The Nano layout is 30 data bytes after status, with five bytes beyond this
-/// decoder's prefix. The other words are not assigned hardware/bootloader
-/// meanings, and no product label is hardcoded.
+/// Additional bytes beyond the decoder's prefix remain opaque. The other words
+/// are not assigned hardware/bootloader meanings, and no product label is hardcoded.
 #[binrw]
 #[derive(Clone, PartialEq, Eq)]
 #[brw(magic = b"\x00\x01")]

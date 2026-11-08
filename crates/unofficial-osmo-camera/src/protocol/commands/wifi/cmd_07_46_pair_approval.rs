@@ -14,8 +14,8 @@ use binrw::{BinRead, BinWrite};
 ///
 /// The acknowledgment travels from APP to the notification sender and only
 /// confirms receipt. There is no leading status byte in the notification.
-/// Nano decision output includes codes 0/1/2/5; an optional second byte is
-/// retained without assigning it authorization or readiness semantics.
+/// Trailing bytes are retained without assigning them authorization or readiness
+/// semantics.
 #[derive(Clone, Debug, PartialEq, Eq, BinRead, BinWrite)]
 #[brw(magic = b"\x07\x46")]
 pub struct PairingApprovalNotification {

@@ -1,7 +1,10 @@
 # osmo-gstreamer for DJI Osmo Nano
 
 Rust-first unofficial Osmo Nano integration, with a Python testing wrapper
-and a native GStreamer plugin. Licensed under [MIT](LICENSE).
+and a native GStreamer plugin. Licensed under [MIT](LICENSE). Some protocol
+information draws on the independently published documentation from
+[luisreysan/osmocam](https://github.com/luisreysan/osmocam), credited below with
+source revisions and compatibility limitations.
 
 ## Unofficial interoperability project
 
@@ -27,7 +30,8 @@ These safeguards do not constitute legal advice or guarantee legal clearance.
 
 The Rust library supports LAN preview and optional BLE setup for Osmo Nano.
 The GStreamer element is `osmosrc`; the Python testing wrapper imports as
-`osmo_camera` and currently exposes only `version()`.
+`osmo_camera` and exposes native control sessions, raw and typed protocol
+bindings, and an evidence-aware capability view.
 
 Camera operations require explicit authorization. Plugin inspection does not
 connect to hardware, and failures never trigger automatic reconnection.
@@ -50,9 +54,11 @@ cargo clippy --locked -p unofficial-osmo-camera --all-targets -- -D warnings
 The default workspace member is the base library, so these tests do not need
 GStreamer installed.
 
+### Model capabilities
+
 Model and firmware coverage lives separately from command codecs in
 `protocol::capabilities`. `NANO_10_00_31_22` includes 37 non-placeholder camera
-parameter IDs (29 GET and 33 SET cases), plus 20 exact read contracts across
+parameter IDs (29 GET and 33 SET cases), plus 21 exact read contracts across
 camera, Wi-Fi, common and media commands. Parameter entries retain the targeted
 profile evidence; other entries are explicitly compatibility contracts, not
 verified firmware availability. `lookup(endpoint, command, selector)` returns
@@ -64,6 +70,8 @@ names remain compatibility APIs, not evidence of Nano support. Value
 meanings, safe SET payloads and current-state availability remain separate
 questions; no new automatic requests or writes are introduced.
 
+### Parameter and command codecs
+
 Each parameter has one payload struct shared by GET and SET, such as
 `EisValue` or `RotationStateValue`. `Get<T>` fixes the requested ID and response
 type; `Set<T>` privately holds the supplied payload of the same type. There is no
@@ -74,6 +82,14 @@ authorization or extend the raw-read allowlist. Callers may define independent
 `CameraCapabilities` tables for other model/firmware scopes; missing entries
 remain unknown and never inherit Nano support. Profile selection is explicit,
 not automatic device detection or a persisted credential-profile setting.
+
+Evidence for recording/live-view EIS payloads and accepted code ranges, and
+the sensor-aspect-lock payload/mode codes, is maintainer-reported authorized
+experimentation on an Osmo Nano running firmware **10.00.31.22**. This is a
+device-observation evidence category, not an official vendor specification or
+verification of other models/firmware. Other parameter entries retain existing
+implementation contracts and are not newly verified by those observations.
+No raw captures, credentials or device identifiers are included.
 
 GET replies are `CommandReadReply<ParameterReply<T>>`: accepted replies expose
 `value: T`; rejected replies retain status and opaque extensions. The accepted
@@ -98,9 +114,36 @@ Its `RotationStateValue` contains
 `reserved_before`, `orientation_code`, and `reserved_after`; the targeted
 layout is `[0, code, 0]`. This derived orientation is not a raw rotation-lock
 configuration or sensor reading. Physical direction/degree mappings remain
-unspecified, unknown codes remain raw, and no autorotation SET is exposed.
+unspecified, unknown codes remain raw, and no SET for this readback is exposed.
 The former `mode_code`/`device_angle_code`/`sensor_angle_code` field names
 have been replaced to avoid implying those unsupported meanings.
+
+The separate `SensorAspectLockSet` codec uses camera expansion command
+`02:FF`, selector `001F`: `SensorAspectLock::Landscape` (`0`),
+`Portrait` (`1`) or `Automatic` (`2`). Its encoded
+payload is exactly 34 bytes: `00 1F 00 mode` and thirty
+zero bytes. The capability profile marks this selector write-only; it does
+not add a query, grant write approval or change preview startup.
+
+```rust
+use unofficial_osmo_camera::protocol::{
+    CommandPacket,
+    commands::camera::cmd_02_ff_sensor_aspect_lock_set::{
+        SensorAspectLock, SensorAspectLockSet,
+    },
+};
+
+let request = SensorAspectLockSet::new(SensorAspectLock::Landscape);
+let payload = request.payload()?;
+assert_eq!(payload.len(), 34);
+assert_eq!(&payload[..4], &[0, 0x1f, 0, 0]);
+```
+
+Encoding does not transmit the request. Use the existing explicitly approved
+write transport when authorized. An ACK confirms handoff, not completed frame
+reconfiguration. This aspect lock is not a general pixel-autorotation switch:
+gravity detection, upside-down rotation, EIS and client display transforms
+are separate, and current-mode restrictions/persistence remain unverified.
 
 Binary command payloads, numeric wire types, DUML/UDP framing, ACKs and media
 headers use `binrw`. Field types own their wire representation; fixed layouts
@@ -182,7 +225,7 @@ FEC, incremental framing and H.264 bitstream algorithms remain explicit.
 
 ```rust
 use unofficial_osmo_camera::protocol::commands::camera::cmd_02_8e_parameters::{
-    EisValue, Get, ParameterReply, Set,
+    CameraStabilizationMode, EisValue, Get, ParameterReply, Set,
 };
 use unofficial_osmo_camera::{
     ControlSession, Result,
@@ -194,7 +237,10 @@ fn read_setting(session: &mut ControlSession) -> Result<CommandReadReply<Paramet
 }
 
 fn write_setting(session: &mut ControlSession, approved: bool) -> Result<()> {
-    session.execute_parameter_set(Set::new(EisValue::new(7)?), approved)
+    session.execute_parameter_set(
+        Set::new(EisValue::new(CameraStabilizationMode::RockSteady)?),
+        approved,
+    )
 }
 ```
 
@@ -264,8 +310,8 @@ start or stop RTMP. Other profile variants remain unchecked.
 The calibration `002B` constructor supplies only action 3's raw focal-length record: zero
 metadata, a byte-length-prefixed NUL-terminated label, LE16 extra length 4,
 raw LE16 focal code and two zero bytes. Units and supported codes are unknown.
-Actions 0..=2 remain outside the constructor subset because their native selectors
-can terminate the provider process. The `002D` constructor permits actions 0/2
+Actions 0..=2 remain outside the constructor subset; their behavior is not
+established by this API. The `002D` constructor permits actions 0/2
 with one name, or 1 with two names,
 behind an exact LE16 data length. Names are nonempty printable ASCII, at most
 127 characters each; total values cannot exceed 255 bytes. These are byte-level
@@ -284,13 +330,137 @@ Checked constructors include recording EIS
 (`EisValue::new`, 0..=7), independent live-view EIS (`LiveViewEisValue::new`, 0..=7),
 stabilization preference (`StabilizationPreferenceValue::new`, 0/1), and stream
 quality (`StreamQualityValue::new`, 0/1/2). Mode labels and availability are not
-inferred from those ranges. To encode a boolean compatibility value, pass
-`u8::from(enabled)` to the relevant constructor; EIS codes 0/1 are not a physical
-on/off guarantee. Nano field-of-view SET codes are
-restricted to 0..=5 and voice-language SET codes to 0/1; invalid values now
+inferred from those ranges. Both EIS payloads now take `CameraStabilizationMode`
+and expose a `mode` field instead of a raw `code` field. For example,
+`EisValue::new(CameraStabilizationMode::RockSteady)` and
+`LiveViewEisValue::new(CameraStabilizationMode::RockSteady)` encode the same
+one-byte mode under their separate IDs (`0008` / `003E`).
+Codes 5..=7 use explicit `Unknown05`, `Unknown06` and `Unknown07` variants;
+their physical mode names are not confirmed. Other codes retain `Unknown(u8)`.
+Constructors reject `Unknown(8..=255)`, while
+manually constructed payloads and GET decoding preserve every byte. The
+existing names are compatibility candidates, not proven effective modes.
+This is a breaking field/constructor change without numeric overloads; wire
+bytes and runtime sequencing are unchanged. The recording and live-view
+parameters retain different firmware GET fallback/error behavior.
+For Boolean compatibility parameters, pass `u8::from(enabled)` to their
+constructor; do not treat EIS codes 0/1 as a guaranteed physical on/off switch.
+The field-of-view SET constructor restricts codes to 0..=5 and the
+voice-language SET constructor to 0/1; invalid values now
 return an error at construction. GET decoding continues to preserve
 unknown codes without applying SET limits. These APIs only encode payloads;
 they neither send requests nor authorize changing a camera setting.
+
+### Recording formats and live-preview capabilities
+
+Recording settings, Wi-Fi preview, LCD output and experimental RTMP profiles
+are separate namespaces. `capabilities::video_formats` supplies six Nano
+recording dimensions, nominal frame-rate codes and published mode combinations.
+Shared `RecordingAspect`, `RecordingResolution`, `RecordingFormat` and
+`PreviewObservation` types live in `protocol::video_formats` and have no Nano
+support restrictions. Resolution identifiers use the lossless
+`VideoResolutionCode`, an enum covering all currently known resolution codes
+with an `Unknown(u8)` fallback, not a Nano-specific protocol enum.
+`NANO_RECORDING_RESOLUTIONS` selects six named variants from that enum.
+Nano mode combinations and option-byte interpretation remain in capabilities;
+they are not applied by generic recording GET/SET codecs.
+The resolution catalog retains all previous entries and adds 1920x1440
+(`0C`) and 3840x2880 (`67`) from the cited public Nano observations.
+Catalog entries do not imply that every camera supports them. Construct
+known codes with variants such as `VideoResolutionCode::Size3840x2160`;
+use `VideoResolutionCode::from(byte)` for raw input and `.wire()` for the byte.
+These replace the former tuple constructor and `.0` field.
+Normal Video has 35 resolution/rate pairs: 24/25/30/48/50/60 for all six
+sizes except 4K 4:3, which stops at 50 fps. Slow Motion has three 120-fps
+4x combinations and 1080p 240-fps 8x; SuperNight has the three 16:9 sizes at
+24/25/30, and Timelapse/Hyperlapse use those sizes at 25/30.
+Photo and unknown capture modes do not inherit Video metadata.
+
+Dimensions and normal/slow-motion/time-lapse limits follow
+[DJI specifications](https://www.dji.com/nano/specs), consulted 2026-11-07.
+Wire IDs, SuperNight combinations and preview observations follow the original,
+independently published [MIT-licensed Nano protocol notes at revision
+2b1b8a1](https://github.com/luisreysan/osmocam/blob/2b1b8a1f94f59578f5092d562fa937fafd0d3a74/docs/PROTOCOL.md).
+No external code or captures were imported. Those observations do not identify
+firmware and are not an official protocol specification or runtime allowlist.
+
+`VideoFormatGet` (`02/19`, empty request) is an exact compatibility read.
+Accepted replies expose `format: VideoFormat` and preserve opaque extensions;
+rejected replies preserve status and rejection bytes. `VideoFormatSet` (`02/18`)
+can replace resolution/rate while retaining current FOV/options.
+Nano nominal 24/25/30/48/50/60 use wire codes 1..=6, not the generic integer-rate
+variants with codes 13..=16. Nominal 60 may be 59.94 fps. The generic resolution
+table is not a Nano support list. The capability helper
+`capabilities::video_formats::with_nano_slow_motion_factor(set, 4|8)` replaces
+only byte 4, independently of the low-six-bit speed-ratio code; callers must
+select a compatible Slow Motion mode and resolution/rate separately.
+`nano_slow_motion_factor(format)` in the same capability module reads that
+model-specific byte. These replace the former Nano methods on protocol types.
+Generic `VideoFormatSet::with_options` accepts all raw option bits without
+Nano factor validation.
+
+```rust
+use unofficial_osmo_camera::{
+    ControlSession, Error, Result,
+    protocol::{
+        commands::{
+            camera::{
+                cmd_02_18_video_format_set::VideoFormat,
+                cmd_02_19_video_format_get::VideoFormatGet,
+            },
+            reply::CommandReadReply,
+        },
+        identity::{CameraCommand, Command},
+    },
+};
+
+fn read_recording_format(session: &mut ControlSession) -> Result<VideoFormat> {
+    match session.execute_query::<VideoFormatGet>()? {
+        CommandReadReply::Accepted(reply) => Ok(reply.format),
+        CommandReadReply::Rejected { status, .. } => Err(Error::CameraRejected {
+            command: Command::Camera(CameraCommand::VideoFormatGet),
+            status,
+        }),
+    }
+}
+```
+
+`common::cmd_00_99_capability_topics` adds explicit `CapabilitySubscribe`
+requests for `camcap_video_format`, `camcap_slowmotion_ratio` and
+`camcap_capture_aspect_type`. Supply a caller-selected subscription ID and
+send `exploration_request(timeout)` through `ControlSession::request_raw`
+with both approvals. Subscription replies use `CapabilitySubscriptionReply`.
+They are not passive GETs, are not added to the read allowlist and are never
+sent during startup. No unsubscribe or session-scoped subscription lifetime
+is promised.
+
+Decode received `00/99` bodies as `CapabilityNotification`; its typed table
+methods preserve unknown row values, check lengths/counts and distinguish
+an available empty table from an explicitly unavailable one. Unknown topics
+remain lossless but cannot be interpreted as a known table. After validating
+a request from recipient `28` to APP, explicitly call
+`acknowledge_capability_notification(&message, true)` to queue its receipt ACK.
+The ACK retains the inbound ID and does not await another command reply.
+No automatic ACK policy, capability cache, mode switch or setting write is added.
+Camera-reported rows describe current availability. Published candidates remain
+separate and never fill missing live topics.
+
+The existing `CaptureAspectTypeValue` (`0046`) remains a four-byte TLV without
+ratio labels. Public notes report one-byte values 1=4:3 and 2=16:9, so this
+width/semantic conflict must be reconciled before relying on that SET for
+aspect selection. It is not the `02/FF` portrait/landscape sensor lock.
+
+Public Wi-Fi preview observations are 1280x720 for 16:9 and 960x720 for 4:3,
+nominally 30 fps; `NANO_PREVIEW_OBSERVATIONS` records these as observations,
+not configurable output modes. Measure actual dimensions from H.264 SPS or
+decoder output. `StreamQualityValue`, `02/1A` quality and `02/4C` SD/HD/LCD
+labels have no verified numeric preview-size mapping. GStreamer `framerate`
+only supplies nominal caps/timing; it does not reconfigure the camera.
+[DJI does not list Nano as supporting Mimo live
+streaming](https://support.dji.com/help/content?customId=01700006728&spaceId=17&re=FI&lang=en&paperDocType=ARTICLE);
+experimental RTMP 720/1080 selectors do not prove preview availability.
+Format changes can interrupt preview; no automatic retries, reconnects,
+timeout changes or guessed settings are introduced.
 
 ### Preview command API migration
 
@@ -446,28 +616,272 @@ including when commands target the Python package in its subdirectory.
 Select `.venv\Scripts\python.exe` in VS Code on Windows (`.venv/bin/python`
 on Linux/macOS). An older nested `.venv` is no longer used; do not move it,
 because virtual environments contain location-specific paths.
-GStreamer is not required. uv uses the default `microsoft-python` package index
+GStreamer is not required. Standard Python builds include the Rust BLE feature;
+Linux builds require `libdbus-1-dev` and `pkg-config`. BLE operations remain
+explicitly opt-in at runtime. uv uses the default `microsoft-python` package index
 at `https://packagefeedproxy.microsoft.io/pypi/simple/`.
 
-```powershell
+```bash
 uv sync --locked --link-mode copy
-uv run --project .\python\unofficial-osmo-camera --no-sync maturin develop --locked --manifest-path .\python\unofficial-osmo-camera\Cargo.toml
-uv run --project .\python\unofficial-osmo-camera --no-sync python -m unittest discover -s .\python\unofficial-osmo-camera\tests
-uv run --project .\python\unofficial-osmo-camera --no-sync ruff check .\python\unofficial-osmo-camera
-uv run --project .\python\unofficial-osmo-camera --no-sync ruff format --check .\python\unofficial-osmo-camera
-cargo fmt --manifest-path .\python\unofficial-osmo-camera\Cargo.toml -- --check
+uv run --project python/unofficial-osmo-camera --no-sync maturin develop --locked \
+  --manifest-path python/unofficial-osmo-camera/Cargo.toml
+uv run --project python/unofficial-osmo-camera --no-sync python -m unittest discover \
+  -s python/unofficial-osmo-camera/tests
+uv run --project python/unofficial-osmo-camera --no-sync ruff check python/unofficial-osmo-camera
+uv run --project python/unofficial-osmo-camera --no-sync ruff format --check python/unofficial-osmo-camera
+cargo fmt --manifest-path python/unofficial-osmo-camera/Cargo.toml -- --check
 ```
 
 Repeat `uv sync --locked --link-mode copy` after tooling lockfile updates;
 `--no-sync` uses the installed tools without updating them. Copy mode avoids
 hardlink warnings when the cache and workspace are on different drives.
 
+### Raw and typed protocol bindings
+
+`osmo_camera.protocol.raw` exposes lossless DUML `Message` values, explicit
+`MessageContext` framing and bounded `Request` exploration. Payloads and unknown
+identities remain uninterpreted; frame decoding still checks lengths/checksums.
+`osmo_camera.protocol.typed` exposes known wire contracts: capability topics,
+subscriptions, replies, notifications, tables and open resolution/frame-rate
+codes. "Typed" means verified wire layout and applicable envelope validation,
+not verified support on every model or firmware. Model support/evidence belongs
+in the Rust capabilities catalog. Generic resolution dimensions do not establish
+camera support or live-preview dimensions.
+
+Both layers use Rust codecs and the same native session owner. Typed requests
+convert with `.to_raw(timeout=...)`; replies and notifications decoded from raw
+frames retain those frames in `.raw` and return them with `.to_raw()`, including
+transport sequence, flags, unknown values and opaque bytes. Body-only
+notifications decoded with `.decode(body)` have `.raw is None` and require an
+explicit `raw.MessageContext` for `.to_raw(context)`; headers are never invented.
+Use explicit `osmo_camera.protocol.raw` and `osmo_camera.protocol.typed`
+namespaces; there are no legacy flat exports.
+Encoding/decoding sends nothing, and payloads are not included in object
+representations or codec errors.
+
+For an already explicitly authorized, open `session`, the layers interoperate
+without a second connection:
+
+```python
+from osmo_camera.protocol import typed
+
+subscription = typed.CapabilitySubscribe(typed.CapabilityTopic.VIDEO_FORMATS, 1)
+reply_frame = session.request_raw(
+    subscription.to_raw(timeout=3.0), approve_unclassified=True
+)
+reply = subscription.decode_reply(reply_frame)
+reply.require_success()
+assert reply.to_raw().encode() == reply_frame.encode()
+```
+
+`session.subscribe(subscription, approve_unclassified=True)` uses that same
+raw exchange path and returns the typed reply directly. Raw requests still use
+Rust's exact known-read allowlist, 0.1..30-second timeout bounds and session-level
+plus per-request approvals for unclassified operations. Media-write restrictions
+cannot be bypassed by choosing the raw layer.
+
+### Capability enumeration
+
+`ControlSession.connect(profile_path, approved=True, allow_unclassified=True)`
+loads an existing caller-selected camera profile through Rust. Connecting
+performs LAN pairing/app registration and a country GET; it does not discover a
+camera, join a network, initialize BLE, start preview or change capture mode.
+The profile must already contain a verified LAN address and pairing identity.
+Use the session as a context manager for explicit teardown. Blocking operations
+release the GIL; a `Cancellation` token can be signaled from another thread.
+Native failures surface as `CameraError` subclasses, not successful empty results.
+
+To explicitly prepare the camera before LAN control, opt into BLE-first startup:
+
+```python
+from osmo_camera import ControlSession
+
+with ControlSession.connect(
+    profile_path,
+    approved=True,
+    allow_unclassified=True,
+    ble_first=True,
+    approve_ble=True,
+) as session:
+    # Use raw or typed requests on this same native owner.
+    ...
+```
+
+Every enabled startup begins with BLE discovery, saved-identity pairing/wake
+and a successful live health reply. A saved camera Wi-Fi MAC is checked when
+present, before associating with the saved network. Rust verifies another BLE
+health reply, explicitly closes BLE, and waits at most 10 seconds for the saved
+LAN pairing endpoint before opening one LAN control session. The native ownership
+lease is retained across the transport handoff. Pairing approval on the camera
+may still be needed. It does not reset credentials, modify the
+profile, switch the computer's network, or retry a failed control connection.
+The profile must already contain a verified LAN address, pairing identity and
+complete saved Wi-Fi settings. Initial pairing remains a separate explicit step.
+`CameraProfile::connect_control_via_ble` supplies this lifecycle to native callers;
+`CameraConfig` connections remain LAN-only. Rust lifecycle logging reports stages
+without publishing network identifiers or credentials.
+BLE-first startup is not an automatic recovery loop or a guarantee for every
+power/idle state. A failed stage surfaces its error; another attempt needs
+explicit caller action.
+
+### Unified capability view
+
+`osmo_camera.capabilities` exposes Rust-backed model metadata and immutable
+camera evidence, without duplicating the catalog in Python:
+
+```python
+from osmo_camera.capabilities import (
+    Availability,
+    CapabilityCatalog,
+    CaptureMode,
+    resolve_capabilities,
+)
+
+catalog = CapabilityCatalog.nano()  # Explicit model selection, not detection.
+view = resolve_capabilities(catalog=catalog, mode=CaptureMode.VIDEO)
+assert view.recording_formats.state is Availability.MISSING
+assert view.recording_formats.current is None
+candidates = view.recording_formats.published
+```
+
+This example is entirely offline. Pass decoded `CapabilityNotification` values
+as `resolve_capabilities(snapshots, ...)` to attach camera evidence without
+opening a connection. For an already authorized, open `session`, collect through
+the same native owner:
+
+```python
+from osmo_camera.capabilities import CapabilityCatalog, CaptureMode
+from osmo_camera.enumerate_capabilities import collect_capabilities
+
+view = collect_capabilities(
+    session,
+    catalog=CapabilityCatalog.nano(),
+    mode=CaptureMode.VIDEO,
+    timeout=15.0,
+    approve_subscriptions=True,
+    approve_acknowledgments=True,
+)
+current = view.recording_formats.current
+candidates = view.recording_formats.published
+```
+
+Each successful call returns one immutable `Capabilities` view. Missing-topic timeouts
+produce incomplete views, not a different return type or a successful static
+fallback. Transport failures, rejections, cancellation and malformed data raise.
+The native control owner retains inbound frames across subscription exchanges,
+idle ticks and receipt ACKs. Its queue is bounded to 1,000 messages; callers
+must consume notifications, and overflow raises rather than silently dropping
+evidence.
+The three topic views are `recording_formats`, `slow_motion_ratios` and
+`capture_aspects`; `view.topics` iterates them in that order. Each retains its
+original `.notification`, including `.notification.raw` when decoded from a
+framed message.
+
+| Topic state | `.current` | Meaning |
+|-------------|------------|---------|
+| `Availability.MISSING` | `None` | No notification received; support is unconfirmed |
+| `Availability.AVAILABLE` | Tuple of rows, possibly empty | Camera reports an available table in its current state |
+| `Availability.UNAVAILABLE` | Empty tuple | Camera explicitly reports this topic unavailable in its current state |
+| `Availability.UNKNOWN` | `None` | Notification received with an unknown availability value; `.error` retains the interpretation failure |
+
+`.published` stays separate even when a live table excludes those candidates.
+`view.complete` is true only when every topic is available or explicitly
+unavailable; it does not mean every format is supported or tested.
+`view.missing` lists topics with no notification, while `view.unresolved` also
+includes unknown availability. Check `.state`, not just whether `.current` is
+empty. Duplicate known-topic snapshots require explicit caller selection, not
+guessed sequence chronology. Offline resolution retains unknown-topic
+notifications in `.other_notifications`; live collection rejects unknown topics
+explicitly rather than treating them as one of the three required snapshots.
+
+Without mode context, published recording candidates retain all their individual
+mode scopes. `CaptureMode` preserves unknown byte codes in `.code` and exposes
+compatibility labels in `.name`. Selecting a mode filters only the published
+recording-format candidates: it neither reads nor changes the actual camera
+mode, and it does not filter camera-reported rows. Slow-motion candidates retain
+their catalog scope and are derived from Rust's published recording formats;
+each candidate keeps its contributing `.formats`. Published recording aspects are **not**
+mapped onto raw aspect codes: that wire equivalence is not established.
+
+`view.command_coverage` retains access, evidence and typed firmware scope
+(`MATCHES`, `DIFFERENT`, `UNKNOWN`, `UNSPECIFIED`). A scope match is not device
+confirmation or write permission. `view.preview_observations` contains published
+observations, never stream measurements or selectable output modes. Source URLs
+remain on `catalog.sources`. Model and firmware context are never inferred.
+Pass a non-empty `firmware` string for exact comparison with a command's stated
+scope; omit it when unknown. Context validation occurs before subscriptions.
+
+This Python API intentionally has no backward-compatibility aliases. Import
+messages and requests through `protocol.raw`, known contracts through
+`protocol.typed`, and decode notifications with `CapabilityNotification.from_raw`.
+The previous flat protocol imports, `from_message`, and tuple/timeout-exception
+collection interface are not public APIs.
+
+The opt-in runner subscribes to all three known capability topics and
+validates recording-format, slow-motion and raw aspect rows using Rust:
+
+```bash
+uv run --project python/unofficial-osmo-camera --no-sync python -m osmo_camera.enumerate_capabilities \
+  --profile .credentials/example.toml --timeout 15 \
+  --approve-registration --approve-subscriptions --approve-acks
+```
+
+Add `--catalog nano`, optionally `--capture-mode 0x01 --firmware VERSION`, to
+include explicitly scoped published candidates in the CLI output.
+Add `--ble-first --approve-ble` to prepare through BLE before each enumeration.
+Both flags are required together and additionally authorize camera Wi-Fi
+association; the existing registration/subscription/ACK approvals remain required.
+
+Run only with explicit device authorization, on the already configured LAN,
+after closing every other camera owner. No hardware operations occur on import
+or during normal tests. The three approval flags authorize registration,
+subscriptions and per-notification receipt ACKs respectively. Subscriptions may
+outlive the session; no unsubscribe contract is established. The enumeration
+window is bounded to 1..30 seconds after connection, and native connection and
+cleanup bounds remain in force. No reconnect, mode switch or metadata fallback
+occurs. Missing topics remain explicit in the returned capability view.
+The runner exits 0 only for a complete view, 1 for incomplete/unknown results or
+camera errors, and 2 for invalid arguments before connecting. It prints partial
+observations when available; published candidates never count as received topics.
+Unavailable and available-empty tables are distinct. Notifications are matched
+by topic name, not an assumed mapping from
+sequence to subscription ID. Snapshots are not atomic across mode changes.
+The output includes decoded rows, state/errors and optional published-candidate
+counts, not raw captures, addresses or pairing data.
+
+Native `.pyi` declarations are generated from the PyO3 binding annotations with
+the optional, MIT/Apache-2.0 `pyo3-stub-gen` dependency. It is not enabled in
+normal extension builds. Regenerate after binding changes and check for drift:
+
+```bash
+uv run --project python/unofficial-osmo-camera --no-sync cargo run --locked \
+  --manifest-path python/unofficial-osmo-camera/Cargo.toml --features stubgen --bin stub-gen
+uv run --project python/unofficial-osmo-camera --no-sync cargo run --locked \
+  --manifest-path python/unofficial-osmo-camera/Cargo.toml --features stubgen --bin stub-gen -- --check
+```
+
+The generated native stub is excluded from Ruff's source formatting; its exact
+generated contents and native export/property coverage have separate checks.
+
 Re-run `maturin develop` after changing Rust code. For a distributable wheel
 and source archive:
 
-```powershell
-uv run --project .\python\unofficial-osmo-camera --no-sync maturin build --locked --release --sdist --manifest-path .\python\unofficial-osmo-camera\Cargo.toml --out .\dist
+```bash
+uv run --project python/unofficial-osmo-camera --no-sync maturin build --locked \
+  --release --sdist --manifest-path python/unofficial-osmo-camera/Cargo.toml --out dist
 ```
+
+Before publication, also verify that the source archive builds independently.
+Extract it outside the checkout, then run `maturin build --locked --release`
+**from the extracted archive root**, which contains its generated
+`pyproject.toml`. That file selects the nested standalone Cargo manifest and
+Python source directory. Building the archive's workspace-root Cargo manifest
+directly is not the Python build entry point. Use the existing uv-managed
+maturin executable; do not initialize a second project or change package feeds.
+Install the resulting wheel into a separate `uv venv` and run the same offline
+test suite without the editable package. Review both archive and wheel contents
+for notices, generated stubs, local evidence, caches, debug symbols and private
+metadata paths; successful compilation alone is not a release audit.
 
 ## GStreamer plugin
 

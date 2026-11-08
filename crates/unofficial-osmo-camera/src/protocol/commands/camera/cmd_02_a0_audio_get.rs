@@ -44,10 +44,8 @@ const AUDIO_AUTO_GAIN_MASK: u8 = 0x08;
 ///         extension: [u8; remaining] | opaque }
 /// ```
 ///
-/// The Nano data layout is 27 bytes: packed LE16, flags, gain code,
-/// four zero bytes, one masked code, then 18 opaque bytes.
-/// This decoder accepts the existing 15-byte prefix and preserves the
-/// additional 12 bytes as extension; 15 is not the total Nano reply size.
+/// This decoder accepts a 15-byte prefix and preserves all additional bytes
+/// as extension; that prefix length does not establish a complete reply size.
 /// A successful read does not establish that preview media carries audio.
 /// Nor does a zero status guarantee that every returned field was refreshed.
 #[binrw]

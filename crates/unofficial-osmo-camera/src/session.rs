@@ -1,3 +1,5 @@
+//! Bounded LAN control and preview sessions with explicit ownership and approvals.
+
 use crate::protocol::{decode, encode};
 use crate::{
     CameraOwnerLease, Error, PreviewReader, Result,
@@ -15,6 +17,7 @@ use crate::{
             common::{
                 cmd_00_81_device_info::AppDeviceInfoResponse,
                 cmd_00_88_app_presence::AppPresenceRequest,
+                cmd_00_99_capability_topics::CapabilityNotification,
             },
             gimbal::cmd_03_da_initialize::GimbalInitializeRequest,
             live_view::cmd_09_a8_live_view_control::LiveViewIFrameRequest,
@@ -26,6 +29,7 @@ use crate::{
         },
         *,
     },
+    validate_receive_timeout,
 };
 use std::{
     collections::VecDeque,
@@ -129,12 +133,21 @@ struct ControlWork {
 }
 enum ControlOperation {
     Request(ExplorationRequest),
+    Reply(Message),
     Receive(Duration),
     StartPreview,
     StopPreview,
 }
 impl ControlSession {
     pub fn connect(config: CameraConfig, cancellation: &PreviewCancellation) -> Result<Self> {
+        Self::connect_with_lease(config, cancellation, None)
+    }
+
+    pub(crate) fn connect_with_lease(
+        config: CameraConfig,
+        cancellation: &PreviewCancellation,
+        lease: Option<Arc<CameraOwnerLease>>,
+    ) -> Result<Self> {
         config.validate()?;
         if cancellation.is_cancelled() {
             return Err(Error::Cancelled);
@@ -153,7 +166,7 @@ impl ControlSession {
             .name("osmo-control-io".into())
             .spawn(move || {
                 let mut link =
-                    match Link::open(&config, worker_stop, PreviewReader::default(), None) {
+                    match Link::open(&config, worker_stop, PreviewReader::default(), lease) {
                         Ok(link) => link,
                         Err(error) => {
                             let _ = ready.send(Err(error.clone()));
@@ -173,42 +186,7 @@ impl ControlSession {
                     return Err(error);
                 }
                 ready.send(Ok(())).map_err(|_| Error::Cancelled)?;
-                let result = (|| loop {
-                    if worker_closing.load(Ordering::Acquire) {
-                        return Ok(());
-                    }
-                    if link.stop.load(Ordering::Acquire) {
-                        return Err(Error::Cancelled);
-                    }
-                    match work.try_recv() {
-                        Ok(ControlWork {
-                            operation,
-                            response,
-                        }) => {
-                            let result = match operation {
-                                ControlOperation::Request(request) => {
-                                    link.exchange_request(request).map(Some)
-                                }
-                                ControlOperation::Receive(duration) => link.receive(duration),
-                                ControlOperation::StartPreview => {
-                                    link.setup_preview().map(|()| None)
-                                }
-                                ControlOperation::StopPreview => link.stop_preview().map(|()| None),
-                            };
-                            let failure = result.as_ref().err().cloned();
-                            response.send(result).map_err(|_| Error::Cancelled)?;
-                            if let Some(error) = failure {
-                                return Err(error);
-                            }
-                        }
-                        Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
-                        Err(mpsc::TryRecvError::Empty) => {}
-                    }
-                    link.control_tick()?;
-                    if link.preview.is_none() {
-                        link.backlog.clear();
-                    }
-                })();
+                let result = link.control_loop(work, &worker_closing);
                 let cleanup = link.stop_preview();
                 match (result, cleanup) {
                     (Ok(()), Ok(())) => Ok(()),
@@ -256,10 +234,32 @@ impl ControlSession {
 
     /// Receives one inbound frame without adding a request or subscription.
     /// Existing APP presence and control acknowledgments continue.
-    /// Silence returns `None`; link failures and cancellation remain errors.
+    /// Notifications received during requests or idle ticks remain queued.
+    /// Silence returns `None`; queue overflow, link failures and cancellation
+    /// remain errors.
     pub fn receive(&mut self, timeout: Duration) -> Result<Option<Message>> {
-        crate::validate_receive_timeout(timeout)?;
+        validate_receive_timeout(timeout)?;
         self.exchange(ControlOperation::Receive(timeout))
+    }
+
+    /// Explicitly queue a receipt ACK for a recognized capability notification.
+    ///
+    /// Requires approval for this operation. No notification subscription or
+    /// automatic acknowledgment policy is installed. An accepted queue operation
+    /// does not guarantee delivery; existing bounded transport handling applies.
+    pub fn acknowledge_capability_notification(
+        &mut self,
+        notification: &Message,
+        approved: bool,
+    ) -> Result<()> {
+        if !approved {
+            return Err(Error::InvalidConfig {
+                field: "capability acknowledgment",
+                reason: "capability notification acknowledgments require explicit approval",
+            });
+        }
+        let reply = CapabilityNotification::acknowledgment(notification)?;
+        self.exchange(ControlOperation::Reply(reply)).map(|_| ())
     }
 
     /// Starts the existing native preview lifecycle on this owner. Video is
@@ -412,9 +412,21 @@ mod rtmp_api_tests {
     use super::*;
     use crate::{
         RtmpConfig, StreamingResolution,
-        protocol::commands::media::{
-            cmd_02_8e_streaming_control::{self, MediaStreamingStateData},
-            cmd_02_e1_broadcast_mode, cmd_08_78_streaming_settings,
+        protocol::commands::{
+            camera::{
+                cmd_02_8e_parameters::{CameraStabilizationMode, EisValue, Get},
+                cmd_02_19_video_format_get::VideoFormatGet,
+                cmd_02_e0_capabilities_get::{
+                    AccessoriesData, AccessoriesGet, EiRangeGet, LensInformationGet,
+                    RecommendedEiGet,
+                },
+            },
+            common::cmd_00_99_capability_topics::CapabilityTopic,
+            media::{
+                cmd_02_8e_streaming_control::{self, MediaStreamingStateData},
+                cmd_02_e1_broadcast_mode, cmd_08_78_streaming_settings,
+            },
+            reply::{CameraReadReply, CommandReadReply},
         },
     };
 
@@ -476,11 +488,83 @@ mod rtmp_api_tests {
     }
 
     #[test]
-    fn typed_parameter_read_and_write_use_one_payload_type_and_no_extra_requests() {
-        use crate::protocol::commands::{
-            camera::cmd_02_8e_parameters::{EisValue, Get},
-            reply::CommandReadReply,
+    fn typed_video_format_get_uses_an_empty_request_without_lifecycle_operations() {
+        let mut session = mock_session_for(
+            Endpoint::Camera,
+            vec![(
+                Command::Camera(CameraCommand::VideoFormatGet),
+                vec![],
+                vec![0, 0x10, 3, 0xa5, 0x34, 0x92],
+            )],
+        );
+        let CommandReadReply::Accepted(reply) = session.execute_query::<VideoFormatGet>().unwrap()
+        else {
+            panic!("expected recording format")
         };
+        assert_eq!(reply.format.resolution.wire(), 0x10);
+        assert_eq!(reply.format.options.0, 0x9234);
+        session.close().unwrap();
+    }
+
+    #[test]
+    fn capability_receipt_ack_is_explicit_and_preserves_the_inbound_request_id() {
+        let data = CapabilityNotification {
+            sequence: 7,
+            opaque_prefix: [0; 5],
+            remaining_length: 0,
+            name: CapabilityTopic::VideoFormats.name().to_vec(),
+            opaque_before_data: [0; 6],
+            data: vec![1, 1, 0, 0],
+        };
+        let mut notification =
+            Message::from_command_body(Endpoint::App, 0x4321, Flags::REQUEST, &data).unwrap();
+        notification.sender = Endpoint::Presence;
+        let expected = CapabilityNotification::acknowledgment(&notification).unwrap();
+        let (commands, work) = mpsc::sync_channel::<ControlWork>(1);
+        let worker = thread::spawn(move || {
+            let ControlWork {
+                operation,
+                response,
+            } = work.recv_timeout(Duration::from_secs(1)).unwrap();
+            let ControlOperation::Reply(reply) = operation else {
+                panic!("unexpected request or lifecycle operation")
+            };
+            assert_eq!(reply, expected);
+            response.send(Ok(None)).unwrap();
+            Ok(())
+        });
+        let mut session = ControlSession {
+            commands,
+            stop: Arc::new(AtomicBool::new(false)),
+            closing: Arc::new(AtomicBool::new(false)),
+            worker: Some(worker),
+            preview_units: Arc::new(AtomicU64::new(0)),
+            preview_commands: Arc::new(Mutex::new(Vec::new())),
+            preview_requested: false,
+            rtmp_requested: false,
+        };
+        assert!(
+            session
+                .acknowledge_capability_notification(&notification, false)
+                .is_err()
+        );
+        let wrong = Message {
+            sender: Endpoint::Camera,
+            ..notification.clone()
+        };
+        assert!(
+            session
+                .acknowledge_capability_notification(&wrong, true)
+                .is_err()
+        );
+        session
+            .acknowledge_capability_notification(&notification, true)
+            .unwrap();
+        session.close().unwrap();
+    }
+
+    #[test]
+    fn typed_parameter_read_and_write_use_one_payload_type_and_no_extra_requests() {
         let command = Command::Camera(CameraCommand::Parameters);
         let mut session = mock_session_for(
             Endpoint::Camera,
@@ -493,19 +577,24 @@ mod rtmp_api_tests {
         else {
             panic!("expected parameter value");
         };
-        assert_eq!(reply.value.code, 7);
+        assert_eq!(reply.value.mode, CameraStabilizationMode::Unknown07);
         session
-            .execute_parameter_set(Set::new(EisValue::new(6).unwrap()), true)
+            .execute_parameter_set(
+                Set::new(EisValue::new(CameraStabilizationMode::Unknown06).unwrap()),
+                true,
+            )
             .unwrap();
         session.close().unwrap();
     }
 
     #[test]
     fn typed_parameter_write_requires_approval_before_sending() {
-        use crate::protocol::commands::camera::cmd_02_8e_parameters::EisValue;
         let mut session = mock_session_for(Endpoint::Camera, vec![]);
         assert!(matches!(
-            session.execute_parameter_set(Set::new(EisValue::new(7).unwrap()), false),
+            session.execute_parameter_set(
+                Set::new(EisValue::new(CameraStabilizationMode::Unknown07).unwrap()),
+                false,
+            ),
             Err(Error::InvalidConfig {
                 field: "camera parameter SET",
                 ..
@@ -516,12 +605,6 @@ mod rtmp_api_tests {
 
     #[test]
     fn capability_query_types_select_distinct_requests_and_responses() {
-        use crate::protocol::commands::{
-            camera::cmd_02_e0_capabilities_get::{
-                AccessoriesData, AccessoriesGet, EiRangeGet, LensInformationGet, RecommendedEiGet,
-            },
-            reply::CameraReadReply,
-        };
         let command = Command::Camera(CameraCommand::Capabilities);
         let mut session = mock_session_for(
             Endpoint::Camera,
@@ -532,17 +615,16 @@ mod rtmp_api_tests {
                 (command, vec![2, 1, 4], vec![0, 2, 0, 4, 0xa5, 0x82]),
             ],
         );
-        let crate::protocol::commands::reply::CommandReadReply::Accepted(range) =
-            session.execute_query::<EiRangeGet>().unwrap()
+        let CommandReadReply::Accepted(range) = session.execute_query::<EiRangeGet>().unwrap()
         else {
             panic!("expected range");
         };
-        let crate::protocol::commands::reply::CommandReadReply::Accepted(recommended) =
+        let CommandReadReply::Accepted(recommended) =
             session.execute_query::<RecommendedEiGet>().unwrap()
         else {
             panic!("expected recommended EI");
         };
-        let crate::protocol::commands::reply::CommandReadReply::Accepted(lens) =
+        let CommandReadReply::Accepted(lens) =
             session.execute_query::<LensInformationGet>().unwrap()
         else {
             panic!("expected lens information");
@@ -561,7 +643,6 @@ mod rtmp_api_tests {
 
     #[test]
     fn typed_parameter_write_never_treats_rejected_or_malformed_ack_as_success() {
-        use crate::protocol::commands::camera::cmd_02_8e_parameters::EisValue;
         let command = Command::Camera(CameraCommand::Parameters);
         for reply in [vec![], vec![0xd6], vec![0, 1], vec![0, 0, 1, 8, 0, 1, 7]] {
             let rejected = reply == [0xd6];
@@ -569,7 +650,10 @@ mod rtmp_api_tests {
                 Endpoint::Camera,
                 vec![(command, vec![1, 1, 8, 0, 1, 7], reply)],
             );
-            let result = session.execute_parameter_set(Set::new(EisValue::new(7).unwrap()), true);
+            let result = session.execute_parameter_set(
+                Set::new(EisValue::new(CameraStabilizationMode::Unknown07).unwrap()),
+                true,
+            );
             if rejected {
                 assert!(matches!(result, Err(Error::CameraRejected { .. })));
             } else {
@@ -1207,6 +1291,47 @@ impl Link {
         }
         Ok(())
     }
+    fn control_loop(
+        &mut self,
+        work: mpsc::Receiver<ControlWork>,
+        closing: &AtomicBool,
+    ) -> Result<()> {
+        loop {
+            if closing.load(Ordering::Acquire) {
+                return Ok(());
+            }
+            if self.stop.load(Ordering::Acquire) {
+                return Err(Error::Cancelled);
+            }
+            match work.try_recv() {
+                Ok(ControlWork {
+                    operation,
+                    response,
+                }) => {
+                    let result = match operation {
+                        ControlOperation::Request(request) => {
+                            self.exchange_request(request).map(Some)
+                        }
+                        ControlOperation::Reply(reply) => self
+                            .queue_reply(reply)
+                            .and_then(|()| self.flush_replies())
+                            .map(|()| None),
+                        ControlOperation::Receive(duration) => self.receive(duration),
+                        ControlOperation::StartPreview => self.setup_preview().map(|()| None),
+                        ControlOperation::StopPreview => self.stop_preview().map(|()| None),
+                    };
+                    let failure = result.as_ref().err().cloned();
+                    response.send(result).map_err(|_| Error::Cancelled)?;
+                    if let Some(error) = failure {
+                        return Err(error);
+                    }
+                }
+                Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+            self.control_tick()?;
+        }
+    }
     fn receive(&mut self, duration: Duration) -> Result<Option<Message>> {
         let deadline = Instant::now() + duration;
         loop {
@@ -1474,14 +1599,7 @@ impl Link {
                     Flags::ACKNOWLEDGMENT,
                     &AppDeviceInfoResponse::default(),
                 )?;
-                if !self.sender.has_reply(&reply)
-                    && !self.deferred.iter().any(|queued| queued.id == reply.id)
-                {
-                    if self.deferred.len() >= usize::from(CONTROL_CAPACITY) {
-                        return Err(Error::LimitExceeded("Device-info reply queue overflow"));
-                    }
-                    self.deferred.push_back(reply);
-                }
+                self.queue_reply(reply)?;
             }
             if self.backlog.len() == MAX_BACKLOG {
                 return Err(Error::LimitExceeded(
@@ -1552,6 +1670,15 @@ impl Link {
                 status,
                 sequence,
             });
+        }
+        Ok(())
+    }
+    fn queue_reply(&mut self, reply: Message) -> Result<()> {
+        if !self.sender.has_reply(&reply) && !self.deferred.contains(&reply) {
+            if self.deferred.len() >= usize::from(CONTROL_CAPACITY) {
+                return Err(Error::LimitExceeded("Control reply queue overflow"));
+            }
+            self.deferred.push_back(reply);
         }
         Ok(())
     }
@@ -1640,6 +1767,195 @@ impl Link {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::commands::common::cmd_00_99_capability_topics::{
+        CapabilitySubscribe, CapabilityTopic,
+    };
+    use std::{env::temp_dir, fs::remove_file, path::PathBuf, process};
+
+    fn loopback_link() -> (Link, UdpSocket, PathBuf) {
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let peer = UdpSocket::bind("127.0.0.1:0").unwrap();
+        udp.connect(peer.local_addr().unwrap()).unwrap();
+        peer.connect(udp.local_addr().unwrap()).unwrap();
+        udp.set_read_timeout(Some(IO_POLL)).unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let lock = temp_dir().join(format!(
+            "osmo-control-test-{}-{}.lock",
+            process::id(),
+            udp.local_addr().unwrap().port(),
+        ));
+        let now = Instant::now();
+        let link = Link {
+            _lease: Arc::new(CameraOwnerLease::acquire_at(&lock).unwrap()),
+            udp,
+            session: INITIAL_SESSION,
+            sender: ControlSender::new(0),
+            encoding: AckEncoding::List,
+            next_id: FIRST_ID,
+            stop: Arc::new(AtomicBool::new(false)),
+            deadline: None,
+            reader: PreviewReader::default(),
+            preview: None,
+            video: 0,
+            download: 0,
+            backlog: VecDeque::new(),
+            deferred: VecDeque::new(),
+            registered: false,
+            playback_requested: false,
+            cleaning_up: false,
+            last_presence: now,
+            last_frame: now,
+            sampled_preview_units: None,
+            preview_commands: None,
+            opened_at: now,
+        };
+        (link, peer, lock)
+    }
+
+    fn capability_snapshot(topic: CapabilityTopic, sequence: u16) -> Message {
+        let body = CapabilityNotification {
+            sequence,
+            opaque_prefix: [0; 5],
+            remaining_length: 0,
+            name: topic.name().to_vec(),
+            opaque_before_data: [0; 6],
+            data: vec![1, 1, 0, 0],
+        };
+        let mut message =
+            Message::from_command_body(Endpoint::App, sequence, Flags::REQUEST, &body).unwrap();
+        message.sender = Endpoint::Presence;
+        message
+    }
+
+    #[test]
+    fn control_worker_retains_notifications_during_subscriptions_and_receipt_acks() {
+        let (mut link, peer, lock) = loopback_link();
+        let topics = [
+            CapabilityTopic::VideoFormats,
+            CapabilityTopic::SlowMotionRatios,
+            CapabilityTopic::CaptureAspects,
+        ];
+        let snapshots = topics
+            .into_iter()
+            .enumerate()
+            .map(|(index, topic)| capability_snapshot(topic, index as u16 + 1))
+            .collect::<Vec<_>>();
+        let idle = capability_snapshot(CapabilityTopic::VideoFormats, 0);
+        let mut expected = vec![idle.clone()];
+        expected.extend(snapshots.clone());
+        let remote = peer.try_clone().unwrap();
+        let respond = move || {
+            let mut subscriptions = 0;
+            let mut buffer = [0; 4096];
+            while subscriptions < topics.len() {
+                let size = remote.recv(&mut buffer).unwrap();
+                for request in Message::scan(&buffer[..size]) {
+                    if request.command != Command::Common(CommonCommand::CapabilityTopics)
+                        || request.flags != Flags::REQUEST
+                    {
+                        continue;
+                    }
+                    let mut payload = Vec::new();
+                    if subscriptions == 0 {
+                        for notification in &snapshots {
+                            payload.extend(encode(notification).unwrap());
+                        }
+                    }
+                    let reply = Message {
+                        sender: request.receiver,
+                        receiver: request.sender,
+                        flags: Flags::RESPONSE,
+                        payload: vec![0],
+                        ..request
+                    };
+                    payload.extend(encode(&reply).unwrap());
+                    remote
+                        .send(
+                            &datagram(PacketType::RoutedCommand, INITIAL_SESSION, 0, &payload)
+                                .unwrap(),
+                        )
+                        .unwrap();
+                    subscriptions += 1;
+                }
+            }
+        };
+        let (commands, work) = mpsc::sync_channel(1);
+        let closing = Arc::new(AtomicBool::new(false));
+        let worker_closing = closing.clone();
+        let stop = link.stop.clone();
+        peer.send(
+            &datagram(
+                PacketType::RoutedCommand,
+                INITIAL_SESSION,
+                0,
+                &encode(&idle).unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let worker = thread::spawn(move || link.control_loop(work, &worker_closing));
+        let mut feedback = [0; 4096];
+        let size = peer.recv(&mut feedback).unwrap();
+        assert!(valid_datagram(&feedback[..size], INITIAL_SESSION));
+        assert_eq!(
+            feedback[TYPE_OFFSET],
+            encode(&PacketType::Acknowledgment).unwrap()[0],
+        );
+        let responder = thread::spawn(respond);
+        let mut session = ControlSession {
+            commands,
+            stop,
+            closing,
+            worker: Some(worker),
+            preview_units: Arc::new(AtomicU64::new(0)),
+            preview_commands: Arc::new(Mutex::new(Vec::new())),
+            preview_requested: false,
+            rtmp_requested: false,
+        };
+        for (index, topic) in topics.into_iter().enumerate() {
+            let request = CapabilitySubscribe::new(topic, index as u32 + 1)
+                .exploration_request(Duration::from_secs(1))
+                .unwrap();
+            assert_eq!(
+                session.request_raw(request, true, true).unwrap().payload,
+                [0]
+            );
+        }
+        for notification in expected {
+            assert_eq!(
+                session.receive(Duration::from_millis(100)).unwrap(),
+                Some(notification.clone()),
+            );
+            session
+                .acknowledge_capability_notification(&notification, true)
+                .unwrap();
+        }
+        session.close().unwrap();
+        responder.join().unwrap();
+        remove_file(lock).unwrap();
+    }
+
+    #[test]
+    fn control_receive_backlog_overflow_is_explicit() {
+        let (mut link, _peer, lock) = loopback_link();
+        let message = capability_snapshot(CapabilityTopic::VideoFormats, 1);
+        link.backlog.resize(MAX_BACKLOG, message.clone());
+        let packet = datagram(
+            PacketType::RoutedCommand,
+            INITIAL_SESSION,
+            0,
+            &encode(&message).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            link.observe(&packet),
+            Err(Error::LimitExceeded(
+                "Control receive backlog limit exceeded"
+            )),
+        ));
+        drop(link);
+        remove_file(lock).unwrap();
+    }
 
     #[test]
     fn preview_raw_requests_require_both_approvals_before_queueing() {

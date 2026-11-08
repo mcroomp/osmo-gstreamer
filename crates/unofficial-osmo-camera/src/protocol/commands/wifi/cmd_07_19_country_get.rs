@@ -10,7 +10,7 @@ use crate::{
 };
 use binrw::{BinWrite, binrw};
 
-/// Read a two-byte country code, accepting both Nano reply formats.
+/// Read a two-byte country code from compact or prefixed reply layouts.
 ///
 /// APP -> Wifi | 0x07/0x19 | Country GET
 ///
@@ -27,7 +27,7 @@ use binrw::{BinWrite, binrw};
 #[bw(magic = b"\x07\x19")]
 pub struct WifiCountryGet;
 
-/// Accepted Nano country data in compact or `FF`-prefixed form.
+/// Accepted country data in compact or `FF`-prefixed form.
 ///
 /// After the status byte, compact data is exactly `country[2], 00`.
 /// Prefixed data is `FF, country[2], 00`, followed by any opaque extension.

@@ -6,6 +6,7 @@ use binrw::{BinRead, BinWrite, binwrite};
 ///
 /// The fixed bytes do not establish dimensions or bitrate. Reply layout,
 /// flags, model support and readback are unspecified. Encoding authorizes no write.
+/// Determine delivered dimensions from the received bitstream, not this selector.
 #[binwrite]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[bw(magic = b"\x02\x4c")]
@@ -70,7 +71,7 @@ mod tests {
         *,
     };
     use crate::protocol::{
-        CommandPacket, ExplorationRequest, Flags, encode,
+        CommandPacket, ExplorationRequest, Flags,
         identity::{CameraCommand, Command, Endpoint},
     };
     use std::time::Duration;
@@ -88,23 +89,26 @@ mod tests {
             ),
             (
                 CameraCommand::LiveViewQualitySet,
-                encode(&LiveViewQualitySet {
+                LiveViewQualitySet {
                     quality: LiveViewQuality::Normal,
-                })
+                }
+                .payload()
                 .unwrap(),
             ),
             (
                 CameraCommand::LiveViewOutputSet,
-                encode(&LiveViewStreamOutputSet {
+                LiveViewStreamOutputSet {
                     format: LiveViewStreamFormat::Auto,
-                })
+                }
+                .payload()
                 .unwrap(),
             ),
             (
                 CameraCommand::LiveViewOutputSet,
-                encode(&LcdOutputSet {
+                LcdOutputSet {
                     format: LcdOutputFormat::Auto,
-                })
+                }
+                .payload()
                 .unwrap(),
             ),
         ];
