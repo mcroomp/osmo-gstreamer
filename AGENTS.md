@@ -18,6 +18,12 @@ provenance or safety requirements. Use [README.md](README.md) for build commands
   than maintaining API migration tables or historical rename guides.
 - Do not add migration tables or rename histories unless explicitly requested.
   Preserve wire-contract details, provenance and model/firmware limitations.
+- Describe APIs exactly as implemented at the time of the documentation update.
+  Verify exported names, signatures, defaults, return types, approvals, errors
+  and lifecycle behavior against the source and relevant tests.
+- Do not present historical, intended or planned behavior as a current contract.
+  State unimplemented behavior as a current limitation, not a promise. Keep
+  device observations and compatibility evidence separate from library behavior.
 
 ## Python work requires an explicit request
 

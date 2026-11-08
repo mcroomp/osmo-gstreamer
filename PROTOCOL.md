@@ -31,10 +31,10 @@ explicit, not automatic device detection or a persisted credential-profile setti
 GET replies are `CommandReadReply<ParameterReply<T>>`: accepted replies expose
 `value: T`; rejected replies retain status and opaque extensions. The accepted
 envelope requires operation 0, count 1, the type's echoed ID and its established
-payload layout. Unknown codes remain raw, but unexpected widths/layouts now
+payload layout. Unknown codes remain raw, but unexpected widths/layouts
 return errors instead of silently falling back to an untyped value.
 Raw exploration remains explicit and approval-gated; it is not a typed fallback.
-The fixed legacy two-ID request is `AdvancedLiveReversalGet`, with an
+The fixed two-ID request is `AdvancedLiveReversalGet`, with an
 `AdvancedLiveReversalReply` response containing `advanced_mode` and opaque
 `legacy_value` fields. No runtime-selected batch API is exposed.
 Each parameter value struct owns its complete TLV, with the parameter ID declared as
@@ -46,12 +46,13 @@ and `Query` constants for fixed read requests.
 Wire serialization remains explicit and
 little-endian, not a memory-layout cast.
 
-`RotationStateValue` (`0014`) is read-only.
-Its `RotationStateValue` contains
+The capability profile marks `RotationStateValue` (`0014`) read-only.
+The struct contains
 `reserved_before`, `orientation_code`, and `reserved_after`; the targeted
 layout is `[0, code, 0]`. This derived orientation is not a raw rotation-lock
 configuration or sensor reading. Physical direction/degree mappings remain
-unspecified, unknown codes remain raw, and no SET for this readback is exposed.
+unspecified and unknown codes remain raw. There is no checked SET constructor;
+generic `Set<T>` can still encode this type without enforcing operation coverage.
 
 The separate `SensorAspectLockSet` codec uses camera expansion command
 `02:FF`, selector `001F`: `SensorAspectLock::Landscape` (`0`),
@@ -69,7 +70,7 @@ use unofficial_osmo_camera::protocol::{
 };
 
 let request = SensorAspectLockSet::new(SensorAspectLock::Landscape);
-let payload = request.payload()?;
+let payload = request.payload().expect("fixed sensor-aspect-lock payload");
 assert_eq!(payload.len(), 34);
 assert_eq!(&payload[..4], &[0, 0x1f, 0, 0]);
 ```
@@ -87,8 +88,7 @@ algorithms remain explicit. Closed numeric enums use `#[brw(repr = u8)]`
 (or `u16`); open enums use variant `magic` attributes followed by a raw
 `Unknown(u8)` fallback. Unknown codes and opaque extensions stay lossless.
 Fixed command layouts can use `magic`; derived writers calculate length
-prefixes without exposing them as caller-settable fields. Maps remain useful
-for lossless raw representations and checked conversions.
+prefixes without exposing them as caller-settable fields.
 The module-version reply reads its fixed fields directly; `product_label()`
 names the text accurately, while `hardware()` remains a compatibility alias.
 
@@ -105,16 +105,14 @@ calculated fields; fixed read payload constants also feed capability matching.
 Default `CommandPacket` and `Query` trait methods derive routing identity,
 construct requests, expose payload-only bytes
 for raw APIs, and decode replies while checking their command identity.
-`MessageContext` supplies sender, receiver, sequence and flags independently
+`MessageContext` supplies sender, receiver, message ID and flags independently
 of the body; DUML framing calculates length and checksums and composes the
 command body once.
 `Get<T>` and `Set<T>` include the camera command prefix as well as their parameter
 envelope. The application device-info response also encodes its command prefix.
 Startup/write requests, BLE keepalive/setup and notifications follow the same
 command-only magic structure. Raw BLE pairing-arm bytes are a GATT characteristic
-write, not a DUML command, and deliberately have no command prefix. Each command
-module starts with module documentation, followed by imports, then the main
-command struct's documentation and declaration, before supporting value types.
+write, not a DUML command, and deliberately have no command prefix.
 
 Typed `Query::Response` is the complete command reply. GET and Reply structs
 declare the same two-byte command-only magic; `Query` checks their agreement
@@ -147,8 +145,10 @@ accessory and media-state alternatives use derived binrw enums. Media rejections
 read directly through EOF with branch assertions; calibration-file records share
 their nested data-length calculation between construction and wire codecs.
 
-Numeric enums no longer provide generated primitive `From`/`Into`/`TryFrom`
-implementations, and no numeric-enum conversion dependency is required.
+Closed numeric enums use binrw for wire conversion rather than generated
+primitive `From`/`Into`/`TryFrom` implementations. Open types such as
+`VideoResolutionCode` expose explicit `From<u8>` and `.wire()` helpers.
+No numeric-enum conversion dependency is required.
 Unsupported closed-enum codes and malformed native enum variants produce
 `Error::WireCodec`, including malformed accessory and media-state layouts.
 Branch errors remain available in the codec error's source; directly raised
@@ -201,11 +201,14 @@ replies are errors. It does not retry, reconnect or confirm the setting's effect
 Capability reads also have independent query types: `EiRangeGet`,
 `RecommendedEiGet`, `LensInformationGet` and `AccessoriesGet`.
 For example, `session.execute_query::<AccessoriesGet>()` returns
-`AccessoriesReply`; the first three return status-bearing replies with
-distinct opaque, nonempty value types. Accessories retain outer and inner
-rejections separately and validate operation/selector before interpreting the
-inner status. Outer rejection uses the shared `CameraReadReply::Rejected`;
-inner rejection is `CameraReadReply::Accepted(AccessoriesData::Rejected { .. })`.
+`AccessoriesReply`, whose `.result` holds the outer `CameraReadReply`.
+The first three return `CommandReadReply<EiRangeReply>`,
+`CommandReadReply<RecommendedEiReply>` and `CommandReadReply<LensInformationReply>`;
+accepted replies expose opaque, nonempty bodies through `.raw_bytes()`.
+Accessories retain outer and inner rejections separately and validate
+operation/selector before interpreting the inner status. On outer rejection,
+`reply.result` is `CameraReadReply::Rejected { .. }`; on inner rejection, it is
+`CameraReadReply::Accepted(AccessoriesData::Rejected { .. })`.
 The capability query and value definitions are explicit structs without custom
 macros. Both LAN and BLE typed query entry points take only the query type.
 
@@ -262,7 +265,7 @@ Checked constructors include recording EIS
 stabilization preference (`StabilizationPreferenceValue::new`, 0/1), and stream
 quality (`StreamQualityValue::new`, 0/1/2). Mode labels and availability are not
 inferred from those ranges. Both EIS payloads take `CameraStabilizationMode`
-and expose a `mode` field instead of a raw `code` field. For example,
+and expose a `mode: CameraStabilizationMode` field. For example,
 `EisValue::new(CameraStabilizationMode::RockSteady)` and
 `LiveViewEisValue::new(CameraStabilizationMode::RockSteady)` encode the same
 one-byte mode under their separate IDs (`0008` / `003E`).
@@ -271,12 +274,12 @@ their physical mode names are not confirmed. Other codes retain `Unknown(u8)`.
 Constructors reject `Unknown(8..=255)`, while
 manually constructed payloads and GET decoding preserve every byte. The
 existing names are compatibility candidates, not proven effective modes.
-The recording and live-view parameters retain different firmware GET
-fallback/error behavior.
+The recording and live-view parameters use separate IDs. Their shared codec
+does not implement firmware-specific GET fallbacks.
 For Boolean compatibility parameters, pass `u8::from(enabled)` to their
 constructor; do not treat EIS codes 0/1 as a guaranteed physical on/off switch.
 The field-of-view SET constructor restricts codes to 0..=5 and the
-voice-language SET constructor to 0/1; invalid values now
+voice-language SET constructor to 0/1; invalid values
 return an error at construction. GET decoding continues to preserve
 unknown codes without applying SET limits. These APIs only encode payloads;
 they neither send requests nor authorize changing a camera setting.
@@ -288,21 +291,21 @@ Model and firmware coverage lives separately from command codecs in
 parameter IDs (29 GET and 33 SET cases), plus 21 exact read contracts across
 camera, Wi-Fi, common and media commands. Parameter entries retain the targeted
 profile evidence; other entries are explicitly compatibility contracts, not
-verified firmware availability. `lookup(endpoint, command, selector)` returns
-operation coverage and evidence. `require_query::<Get<T>>()` rejects
-legacy-only and write-only parameter reads for this profile. Generic
+verified firmware availability.
+`lookup(receiver, command, selector) -> Option<&CommandCapability>` returns
+matching operation coverage and evidence, or `None` for an unknown entry.
+`require_query::<Get<T>>()` rejects parameter reads not allowed by this profile. Generic
 `Get<T>` and `Set<T>` use the same `Parameter` bounds without enforcing operation
-support. Existing legacy
-names remain compatibility APIs, not evidence of Nano support. Value
+support. Compatibility codec names are not evidence of Nano support. Value
 meanings, safe SET payloads and current-state availability remain separate
-questions; no new automatic requests or writes are introduced.
+questions; looking up coverage sends no requests or writes.
 
 Evidence for recording/live-view EIS payloads and accepted code ranges, and
 the sensor-aspect-lock payload/mode codes, is maintainer-reported authorized
 experimentation on an Osmo Nano running firmware **10.00.31.22**. This is a
 device-observation evidence category, not an official vendor specification or
-verification of other models/firmware. Other parameter entries retain existing
-implementation contracts and are not newly verified by those observations.
+verification of other models/firmware. Other parameter entries describe
+implementation coverage without asserting device-observation evidence.
 No raw captures, credentials or device identifiers are included.
 
 ### Recording formats and live-preview capabilities
@@ -378,7 +381,7 @@ fn read_recording_format(session: &mut ControlSession) -> Result<VideoFormat> {
 }
 ```
 
-`common::cmd_00_99_capability_topics` adds explicit `CapabilitySubscribe`
+`common::cmd_00_99_capability_topics` exposes explicit `CapabilitySubscribe`
 requests for `camcap_video_format`, `camcap_slowmotion_ratio` and
 `camcap_capture_aspect_type`. Supply a caller-selected subscription ID and
 send `exploration_request(timeout)` through `ControlSession::request_raw`
@@ -394,14 +397,15 @@ remain lossless but cannot be interpreted as a known table. After validating
 a request from recipient `28` to APP, explicitly call
 `acknowledge_capability_notification(&message, true)` to queue its receipt ACK.
 The ACK retains the inbound ID and does not await another command reply.
-No automatic ACK policy, capability cache, mode switch or setting write is added.
+Decoding installs no automatic ACK policy or capability cache and sends no mode
+switch or setting write.
 Camera-reported rows describe current availability. Published candidates remain
 separate and never fill missing live topics.
 
-The existing `CaptureAspectTypeValue` (`0046`) remains a four-byte TLV without
+`CaptureAspectTypeValue` (`0046`) is a four-byte TLV without
 ratio labels. Public notes report one-byte values 1=4:3 and 2=16:9, so this
-width/semantic conflict must be reconciled before relying on that SET for
-aspect selection. It is not the `02/FF` portrait/landscape sensor lock.
+current codec has no established equivalence to those aspect labels and is not
+a verified aspect selector. It is not the `02/FF` portrait/landscape sensor lock.
 
 Public Wi-Fi preview observations are 1280x720 for 16:9 and 960x720 for 4:3,
 nominally 30 fps; `NANO_PREVIEW_OBSERVATIONS` records these as observations,
@@ -412,8 +416,8 @@ only supplies nominal caps/timing; it does not reconfigure the camera.
 [DJI does not list Nano as supporting Mimo live
 streaming](https://support.dji.com/help/content?customId=01700006728&spaceId=17&re=FI&lang=en&paperDocType=ARTICLE);
 experimental RTMP 720/1080 selectors do not prove preview availability.
-Format changes can interrupt preview; no automatic retries, reconnects,
-timeout changes or guessed settings are introduced.
+Format changes can interrupt preview. These format helpers only encode payloads;
+they do not retry requests, reconnect, change timeouts or infer settings.
 
 ## Preview command contracts
 

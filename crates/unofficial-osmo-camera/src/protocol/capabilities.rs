@@ -7,10 +7,10 @@
 //! Targeted compatibility is Osmo Nano. Model-specific notes belong here rather
 //! than in command codecs, whose layouts do not establish device availability.
 //!
-//! ## Legacy model-scoped compatibility notes
+//! ## Model-scoped compatibility notes
 //!
-//! These preserve existing implementation descriptions, not newly verified
-//! firmware support. The explicit device-experimentation evidence on
+//! These describe compatibility candidates, not verified firmware support.
+//! The explicit device-experimentation evidence on
 //! [`NANO_10_00_31_22`] covers only its stated EIS and aspect-lock contracts.
 //!
 //! - Nano module-version data has a 30-byte accepted body: the generic decoder
@@ -32,7 +32,7 @@
 //!   do not establish overlay or lock-state semantics.
 //! - Nano storage and format-2 watermark layouts are compatibility candidates;
 //!   physical storage names, watermark encodings and effective flags remain
-//!   unspecified. Legacy user-ISO labels do not establish physical sensitivity.
+//!   unspecified. User-ISO labels do not establish physical sensitivity.
 //! - Nano Wi-Fi country replies include compact and `FF`-prefixed forms.
 //!   Pairing uses an identity of at most 32 encoded bytes and the library's
 //!   fixed client label. Approval codes include 0/1/2/5 with opaque extensions.

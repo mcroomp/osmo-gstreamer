@@ -90,7 +90,8 @@ impl ControlSession {
         self.rtmp_command(request(&EnterBroadcastMode::default(), approved)?, false)
     }
 
-    /// Applies settings in broadcast mode, without starting publication.
+    /// Sends settings without issuing a publication-start command.
+    /// The caller is responsible for selecting broadcast mode; it is not queried.
     /// The caller owns and authorizes the destination and publishing key.
     pub fn configure_rtmp(&mut self, config: &RtmpConfig, approved: bool) -> Result<()> {
         self.rtmp_command(
@@ -104,7 +105,8 @@ impl ControlSession {
         )
     }
 
-    /// Requests start after successful mode entry and configuration.
+    /// Requests publication start without verifying mode entry or configuration.
+    /// The caller is responsible for those prerequisites.
     /// A success reply is not proof of receiver acceptance or delivered frames.
     pub fn start_rtmp(&mut self, approved: bool) -> Result<()> {
         self.rtmp_command(

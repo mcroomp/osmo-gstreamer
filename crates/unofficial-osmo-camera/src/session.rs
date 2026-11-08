@@ -278,7 +278,9 @@ impl ControlSession {
         self.exchange(ControlOperation::StartPreview).map(|_| ())
     }
 
-    /// Restores normal camera mode without closing this control owner.
+    /// Requests playback enter/leave cleanup for an active preview without
+    /// closing this control owner.
+    /// Successful replies do not confirm restoration of prior camera settings.
     pub fn stop_preview(&mut self) -> Result<()> {
         self.exchange(ControlOperation::StopPreview)?;
         self.preview_requested = false;
@@ -873,7 +875,8 @@ impl CameraSession {
     /// Unclassified requests require both approvals, as on [`ControlSession`].
     /// The caller must keep draining the preview reader during the exchange.
     /// A transport failure or reply timeout terminates the session; no retry or
-    /// reconnect is added. A reply is returned without assuming its payload layout.
+    /// automatic reconnect occurs. A reply is returned without assuming its
+    /// payload layout.
     pub fn request_raw(
         &mut self,
         request: ExplorationRequest,

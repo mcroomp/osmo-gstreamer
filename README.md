@@ -111,7 +111,9 @@ is unverified. Debug formatting redacts destination bytes; the settings
 still contain the key in memory and on the control transport.
 
 The high-level configuration uses default FPS, zero-valued unknown fields
-and adaptive bitrate off. `.with_adaptive_bitrate(true)` requests its flag,
+and adaptive bitrate off. `RtmpConfig::new` requires a nonzero `u16`
+`bitrate_kbps`; that encoding bound is not a supported operating range.
+`.with_adaptive_bitrate(true)` requests its flag,
 not a guaranteed adaptive policy. Resolution selectors 4/10 request the
 720/1080 size families; rotation can swap width and height. No safe bitrate
 range, delivered frame rate, 4K RTMP mode or working Nano publication is
@@ -182,11 +184,13 @@ Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/).
 The uv workspace shares one `.venv` and `uv.lock` at the repository root,
 including when commands target the Python package in its subdirectory.
 Select `.venv\Scripts\python.exe` in VS Code on Windows (`.venv/bin/python`
-on Linux/macOS). An older nested `.venv` is no longer used; do not move it,
-because virtual environments contain location-specific paths.
-GStreamer is not required. Standard Python builds include the Rust BLE feature;
-Linux builds require `libdbus-1-dev` and `pkg-config`. BLE operations remain
-explicitly opt-in at runtime. uv uses the default `microsoft-python` package index
+on Linux/macOS). Use the repository-root environment; do not relocate virtual
+environments, because they contain location-specific paths.
+GStreamer is not required. Standard Python builds include the Rust BLE feature.
+Builds without `ble` reject approved BLE-first startup with `UnsupportedError`,
+not a LAN-only fallback. Linux builds with BLE require `libdbus-1-dev` and
+`pkg-config`. BLE operations are explicitly opt-in at runtime.
+uv uses the default `microsoft-python` package index
 at `https://packagefeedproxy.microsoft.io/pypi/simple/`.
 
 ```bash
@@ -223,7 +227,7 @@ transport sequence, flags, unknown values and opaque bytes. Body-only
 notifications decoded with `.decode(body)` have `.raw is None` and require an
 explicit `raw.MessageContext` for `.to_raw(context)`; headers are never invented.
 Use explicit `osmo_camera.protocol.raw` and `osmo_camera.protocol.typed`
-namespaces; there are no legacy flat exports.
+namespaces.
 Encoding/decoding sends nothing, and payloads are not included in object
 representations or codec errors.
 
@@ -646,8 +650,9 @@ the two `.crate` source archives, checksums, and native archives for:
 - macOS Intel and Apple Silicon: `libgstosmo.dylib` and `osmo-pair`.
 
 Native archives include the plugin under `lib`, the pairing utility under
-`bin`, licenses, third-party notices, and `BUILD-INFO.txt` with runtime
-requirements. GStreamer itself and Python wheels are not included.
+`bin`, [README.md](README.md), [PROTOCOL.md](PROTOCOL.md), licenses, third-party
+notices, and `BUILD-INFO.txt` with runtime requirements. GStreamer itself and
+Python wheels are not included.
 
 Maintainers must configure protected release tags and the `CargoPublish`
 environment with approval and a narrowly scoped `CARGO_REGISTRY_TOKEN`.

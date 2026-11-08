@@ -72,9 +72,10 @@ pub struct AdvancedLiveReversalGet {
 #[cfg(test)]
 mod tests;
 
-/// Advanced-mode code: GET 0/1, SET 0..=2; not live reversal.
+/// Raw advanced-mode code; the SET constructor accepts 0..=2.
 ///
-/// SET also updates voice control after the primary service call.
+/// GET decoding preserves every byte. Encoding does not send a request or
+/// perform additional voice-control operations.
 #[binrw]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[brw(little, magic = 0x0000u16)]
@@ -140,7 +141,7 @@ impl FpvControlValue {
     }
 }
 
-/// Raw stream-quality code: SET 0=Default, 1=Normal, 2=High.
+/// Raw stream-quality code; the SET constructor accepts 0..=2.
 ///
 /// No bitrate or resolution mapping is assigned; GET retains other codes.
 /// This is not the recording format (`02/18` and `02/19`), an LCD format,
@@ -186,7 +187,7 @@ impl Parameter for PreviousModeValue {}
 /// Recording stabilization code; the SET constructor accepts 0..=7, not just 0/1.
 ///
 /// Shares the one-byte [`CameraStabilizationMode`] with [`LiveViewEisValue`],
-/// but uses an independent parameter ID and service.
+/// but uses an independent parameter ID.
 /// A zero GET code alone does not establish that stabilization is disabled.
 #[binrw]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -781,7 +782,10 @@ impl CaptureAspectTypeValue {
     }
 }
 
-/// Read-only derived orientation record, not rotation-lock configuration.
+/// Derived orientation record, not rotation-lock configuration.
+///
+/// The capability profile marks it read-only. It has no checked SET constructor,
+/// but generic `Set<T>` can encode it without enforcing operation coverage.
 #[binrw]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[brw(little, magic = 0x0014u16)]
