@@ -4,6 +4,7 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import osmo_camera
 from osmo_camera import _native
@@ -259,7 +260,7 @@ class ProtocolBindingTests(unittest.TestCase):
 
     def test_stubs_cover_native_exports_and_members(self) -> None:
         tree = ast.parse(
-            Path(_native.__file__).with_suffix(".pyi").read_text(encoding="utf-8")
+            Path(_native.__file__).with_name("_native.pyi").read_text(encoding="utf-8")
         )
         declarations = {
             item.name: item
@@ -288,6 +289,18 @@ class ProtocolBindingTests(unittest.TestCase):
                 if isinstance(base, ast.Attribute) and isinstance(base.value, ast.Name):
                     if base.value.id == "builtins":
                         self.assertTrue(hasattr(builtins, base.attr), base.attr)
+
+    def test_stubs_cover_tagged_extension_filenames(self) -> None:
+        directory = Path(_native.__file__).parent
+        for filename in (
+            "_native.abi3.so",
+            "_native.cpython-310-x86_64-linux-gnu.so",
+        ):
+            with (
+                self.subTest(filename=filename),
+                patch.object(_native, "__file__", str(directory / filename)),
+            ):
+                self.test_stubs_cover_native_exports_and_members()
 
 
 if __name__ == "__main__":

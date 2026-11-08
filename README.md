@@ -422,8 +422,14 @@ counts, not raw captures, addresses or pairing data.
 Native `.pyi` declarations are generated from the PyO3 binding annotations with
 the optional, MIT/Apache-2.0 `pyo3-stub-gen` dependency. It is not enabled in
 normal extension builds. Regenerate after binding changes and check for drift:
+On Linux, the native generator needs the selected interpreter's shared-library
+directory on `LD_LIBRARY_PATH`.
 
 ```bash
+if [ "$(uname -s)" = Linux ]; then
+  python_libdir="$(uv run --project python/unofficial-osmo-camera --no-sync python -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')"
+  export LD_LIBRARY_PATH="$python_libdir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
 uv run --project python/unofficial-osmo-camera --no-sync cargo run --locked \
   --manifest-path python/unofficial-osmo-camera/Cargo.toml --features stubgen --bin stub-gen
 uv run --project python/unofficial-osmo-camera --no-sync cargo run --locked \

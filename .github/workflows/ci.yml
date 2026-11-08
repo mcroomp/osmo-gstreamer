@@ -50,7 +50,10 @@ jobs:
           RUSTDOCFLAGS: -D warnings
       - run: uv sync --locked
       - name: Check generated Python binding stubs
-        run: uv run --project python/unofficial-osmo-camera --no-sync cargo run --locked --manifest-path python/unofficial-osmo-camera/Cargo.toml --features stubgen --bin stub-gen -- --check
+        run: |
+          python_libdir="$(uv run --project python/unofficial-osmo-camera --no-sync python -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')"
+          export LD_LIBRARY_PATH="$python_libdir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          uv run --project python/unofficial-osmo-camera --no-sync cargo run --locked --manifest-path python/unofficial-osmo-camera/Cargo.toml --features stubgen --bin stub-gen -- --check
       - run: uv run --project python/unofficial-osmo-camera --no-sync ruff check python/unofficial-osmo-camera
       - run: uv run --project python/unofficial-osmo-camera --no-sync ruff format --check python/unofficial-osmo-camera
       - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
