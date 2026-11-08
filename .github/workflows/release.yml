@@ -109,14 +109,14 @@ jobs:
           fi
           echo "RUSTFLAGS=--remap-path-prefix=$workspace=/osmo-gstreamer --remap-path-prefix=$build_home=/build-home" >> "$GITHUB_ENV"
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --locked --workspace --all-targets --all-features --target "$RELEASE_TARGET" -- -D warnings
-      - run: cargo test --locked --release --workspace --all-features --target "$RELEASE_TARGET"
-      - run: cargo build --locked --release --workspace --all-features --target "$RELEASE_TARGET"
+      - run: cargo clippy --locked --workspace --all-targets --target "$RELEASE_TARGET" -- -D warnings
+      - run: cargo test --locked --release --workspace --target "$RELEASE_TARGET"
+      - run: cargo build --locked --release --workspace --target "$RELEASE_TARGET"
       - name: Generate dependency notices
         run: |
           cargo install cargo-about --version 0.9.3 --features cli --locked
           mkdir -p dist
-          cargo about generate --locked --workspace --all-features --fail scripts/licenses.hbs -o dist/THIRD-PARTY-LICENSES.txt
+          cargo about generate --locked --workspace --fail scripts/licenses.hbs -o dist/THIRD-PARTY-LICENSES.txt
       - name: Inspect Windows native dependencies
         if: runner.os == 'Windows'
         shell: pwsh
@@ -169,7 +169,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libdbus-1-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev pkg-config
-      - run: cargo package --locked --workspace --all-features
+      - run: cargo package --locked --workspace
       - name: Stage and inspect source archives
         env:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}

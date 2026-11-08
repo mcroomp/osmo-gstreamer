@@ -19,7 +19,6 @@ pub mod video_formats;
 pub(crate) use codec::{binrw_error, codec_error};
 pub use codec::{decode, encode};
 pub use command::{CommandPacket, CommandReply};
-#[cfg(feature = "ble")]
 pub(crate) use duml::DumlPrefix;
 pub use duml::*;
 pub use exploration::*;

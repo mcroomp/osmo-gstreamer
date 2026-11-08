@@ -8,7 +8,8 @@ crate and its descendants.
 - Expose pure Rust APIs; do not depend on Python, GStreamer, a GUI or a CLI.
 - Keep protocol, transport, camera ownership and lifecycle here, not in
   adapters. The current implementation targets Osmo Nano LAN preview and
-  optional BLE operations; do not imply broader model or firmware support.
+  BLE operations; do not imply broader model or firmware support. BLE support
+  is always compiled in, but hardware operations require explicit approval.
 - Use typed commands, endpoints, statuses and payloads; keep wire encoding and
   decoding at explicit boundaries. Preserve unknown values without inventing
   meanings. Separate codecs from transport and lifecycle orchestration.
@@ -31,13 +32,11 @@ From the repository root:
 
 ```powershell
 cargo test --locked -p unofficial-osmo-camera
-cargo test --locked -p unofficial-osmo-camera --features ble
 cargo clippy --locked -p unofficial-osmo-camera --all-targets -- -D warnings
-cargo clippy --locked -p unofficial-osmo-camera --features ble --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
-BLE-enabled Linux checks require `libdbus-1-dev` and `pkg-config`.
+Linux builds and checks require `libdbus-1-dev` and `pkg-config`.
 Preserve Rust 1.92 compatibility and independence from the GStreamer SDK.
 When APIs change, rebuild and test affected adapters within the requested scope.
 Do not modify, rebuild or test Python bindings or alter Python environments

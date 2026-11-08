@@ -3,6 +3,7 @@
 use crate::protocol::{decode, encode};
 use crate::{
     CameraOwnerLease, Error, PreviewReader, Result,
+    ble::BleSession,
     control::ControlSender,
     installation_identity::validate_identity,
     preview::PreviewReceiver,
@@ -90,8 +91,7 @@ pub struct CameraSession {
     commands: mpsc::SyncSender<PreviewRequest>,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<Result<()>>>,
-    #[cfg(feature = "ble")]
-    pub(crate) ble_owner: Option<crate::ble::BleSession>,
+    pub(crate) ble_owner: Option<BleSession>,
 }
 
 struct PreviewRequest {
@@ -838,7 +838,6 @@ impl CameraSession {
             commands,
             stop,
             worker: Some(worker),
-            #[cfg(feature = "ble")]
             ble_owner: None,
         };
         match ready_rx.recv_timeout(STARTUP_TIMEOUT + TCP_TIMEOUT + CLEANUP_TIMEOUT + IO_POLL) {
@@ -914,7 +913,6 @@ impl CameraSession {
         } else {
             Ok(())
         };
-        #[cfg(feature = "ble")]
         if let Some(mut ble) = self.ble_owner.take() {
             let cleanup = match ble.close() {
                 Err(Error::Cancelled) => {
@@ -1976,7 +1974,6 @@ mod tests {
             commands,
             stop,
             worker: Some(worker),
-            #[cfg(feature = "ble")]
             ble_owner: None,
         };
         let request = ExplorationRequest {

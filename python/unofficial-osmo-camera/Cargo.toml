@@ -15,8 +15,6 @@ name = "_native"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["ble"]
-ble = ["unofficial-osmo-camera/ble"]
 extension-module = ["pyo3/extension-module"]
 stubgen = ["dep:pyo3-stub-gen"]
 

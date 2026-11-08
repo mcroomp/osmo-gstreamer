@@ -29,7 +29,7 @@ These safeguards do not constitute legal advice or guarantee legal clearance.
 | Python wrapper | [python/unofficial-osmo-camera](python/unofficial-osmo-camera) | Thin PyO3/maturin bindings for testing the Rust library |
 | GStreamer plugin | [crates/gst-plugin-unofficial-osmo](crates/gst-plugin-unofficial-osmo) | Adapt the Rust library to a GStreamer source |
 
-The Rust library supports LAN preview and optional BLE setup for Osmo Nano.
+The Rust library supports LAN preview and built-in BLE setup for Osmo Nano.
 The GStreamer element is `osmosrc`; the Python testing wrapper imports as
 `osmo_camera` and exposes native control sessions, raw and typed protocol
 bindings, and an evidence-aware capability view.
@@ -41,7 +41,8 @@ CI tests are hardware-free and do not establish device compatibility.
 
 ## Rust
 
-Requires a native linker (MSVC build tools on Windows).
+Requires a native linker (MSVC build tools on Windows). Linux builds require
+`libdbus-1-dev` and `pkg-config`, including for LAN-only callers.
 The [toolchain file](rust-toolchain.toml) pins Rust 1.99.1 with rustfmt and
 Clippy; the library's minimum supported Rust version is 1.92.
 Run these commands from the repository root:
@@ -150,7 +151,7 @@ below with the computer's camera-reachable LAN IP, not the camera IP or
 `0.0.0.0`. Use the same publishing path/key:
 
 ```powershell
-cargo run --locked -p unofficial-osmo-camera --features ble --bin osmo-pair -- --camera camera --rtmp-setup "rtmp://192.0.2.20:31935/live/local-test-key"
+cargo run --locked -p unofficial-osmo-camera --bin osmo-pair -- --camera camera --rtmp-setup "rtmp://192.0.2.20:31935/live/local-test-key"
 ```
 
 `--rtmp-setup URL` explicitly approves entering broadcast mode, querying/logging
@@ -167,8 +168,8 @@ receiver independently. The following commands each pair/reapply Wi-Fi first,
 which can itself disrupt an existing stream:
 
 ```powershell
-cargo run --locked -p unofficial-osmo-camera --features ble --bin osmo-pair -- --rtmp-state
-cargo run --locked -p unofficial-osmo-camera --features ble --bin osmo-pair -- --rtmp-stop
+cargo run --locked -p unofficial-osmo-camera --bin osmo-pair -- --rtmp-state
+cargo run --locked -p unofficial-osmo-camera --bin osmo-pair -- --rtmp-stop
 ```
 
 State-query rejections report only their first status byte and reply length.
@@ -186,9 +187,8 @@ including when commands target the Python package in its subdirectory.
 Select `.venv\Scripts\python.exe` in VS Code on Windows (`.venv/bin/python`
 on Linux/macOS). Use the repository-root environment; do not relocate virtual
 environments, because they contain location-specific paths.
-GStreamer is not required. Standard Python builds include the Rust BLE feature.
-Builds without `ble` reject approved BLE-first startup with `UnsupportedError`,
-not a LAN-only fallback. Linux builds with BLE require `libdbus-1-dev` and
+GStreamer is not required. All Python builds include Rust BLE support.
+Linux builds require `libdbus-1-dev` and
 `pkg-config`. BLE operations are explicitly opt-in at runtime.
 uv uses the default `microsoft-python` package index
 at `https://packagefeedproxy.microsoft.io/pypi/simple/`.
@@ -484,13 +484,13 @@ running setup.
 On Ubuntu or Debian (including WSL), run `bash ./setup.sh` as your normal user
 to install build dependencies and the pinned Rust toolchain. It uses sudo for
 apt packages. On other Linux distributions, install the GStreamer and
-plugins-base development packages and `pkg-config`; BLE builds also require
+plugins-base development packages and `pkg-config`; builds also require
 the D-Bus development libraries. Both setup scripts are safe to rerun.
 
 ```powershell
 cargo build --locked -p gst-plugin-unofficial-osmo
 cargo test --locked --workspace
-cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo clippy --locked --workspace --all-targets -- -D warnings
 $env:GST_PLUGIN_PATH = (Resolve-Path .\target\debug).Path
 gst-inspect-1.0 osmosrc
 ```
@@ -508,8 +508,8 @@ the camera and configures the camera to join that Wi-Fi network; it does not
 change the computer's Wi-Fi settings:
 
 ```powershell
-cargo run --locked -p unofficial-osmo-camera --features ble --bin osmo-pair
-cargo run --locked -p unofficial-osmo-camera --features ble --bin osmo-pair -- --camera office
+cargo run --locked -p unofficial-osmo-camera --bin osmo-pair
+cargo run --locked -p unofficial-osmo-camera --bin osmo-pair -- --camera office
 ```
 
 Verify the saved `camera_ip` before streaming; automatic address lookup is
@@ -569,7 +569,7 @@ run the pairing utility's opt-in smoke test:
 
 ```powershell
 $env:RUST_LOG = "unofficial_osmo_camera=debug,osmo_pair=info"
-cargo run --locked -p unofficial-osmo-camera --features ble --bin osmo-pair -- --smoke-test
+cargo run --locked -p unofficial-osmo-camera --bin osmo-pair -- --smoke-test
 ```
 
 It uses the selected profile (add `--camera PROFILE` if needed), receives three
@@ -583,7 +583,7 @@ For a longer timing diagnostic, run:
 
 ```powershell
 $env:RUST_LOG = "osmo_pair=debug,unofficial_osmo_camera=info"
-cargo run --locked -p unofficial-osmo-camera --features ble --bin osmo-pair -- --timing-test 60
+cargo run --locked -p unofficial-osmo-camera --bin osmo-pair -- --timing-test 60
 ```
 
 The duration is 1-300 seconds after startup. This logs video arrival timing and
@@ -596,7 +596,7 @@ With explicit authorization to change preview settings on a real camera and
 settings, and five stream-output settings:
 
 ```powershell
-cargo run --locked -p unofficial-osmo-camera --features ble --example preview-configs -- camera --approve-experimental-writes
+cargo run --locked -p unofficial-osmo-camera --example preview-configs -- camera --approve-experimental-writes
 ```
 
 It reports dimensions, arrival FPS, bitrate, and gaps without saving captures.

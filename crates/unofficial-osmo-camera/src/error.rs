@@ -1,4 +1,5 @@
 use crate::protocol::{ResponseStatus, identity::Command};
+use btleplug::Error as BluetoothError;
 use std::{
     io,
     sync::{Arc, mpsc::RecvTimeoutError},
@@ -12,12 +13,11 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     #[error("Operation cancelled")]
     Cancelled,
-    #[cfg(feature = "ble")]
     #[error("Could not {operation}: {source}")]
     Bluetooth {
         operation: &'static str,
         #[source]
-        source: Arc<btleplug::Error>,
+        source: Arc<BluetoothError>,
     },
     #[error("Invalid {field}: {reason}")]
     InvalidConfig {

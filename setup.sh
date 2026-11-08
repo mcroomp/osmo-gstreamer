@@ -36,4 +36,4 @@ rustup toolchain install 1.99.1 --profile minimal --component rustfmt --componen
 
 echo
 echo "Linux development prerequisites are ready."
-echo "Run the workspace tests with: cargo +1.99.1 test --locked --workspace --all-features"
+echo "Run the workspace tests with: cargo +1.99.1 test --locked --workspace"

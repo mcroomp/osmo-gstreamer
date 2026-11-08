@@ -65,7 +65,7 @@ curl() {
 cargo() {
     case "$1" in
         package)
-            [[ $* == 'package --locked --workspace --all-features' ]] || return 1
+            [[ $* == 'package --locked --workspace' ]] || return 1
             echo package >> calls.log
             for name in unofficial-osmo-camera gst-plugin-unofficial-osmo; do
                 [[ $name != "$TEST_OMIT_ARCHIVE" ]] || continue
@@ -78,7 +78,7 @@ cargo() {
             ;;
         publish)
             local name=${6}
-            [[ $* == "publish --locked --registry crates-io -p $name --all-features" ]] || return 1
+            [[ $* == "publish --locked --registry crates-io -p $name" ]] || return 1
             echo "$name" >> calls.log
             return "$TEST_PUBLISH_EXIT"
             ;;
