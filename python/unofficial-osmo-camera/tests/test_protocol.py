@@ -258,6 +258,27 @@ class ProtocolBindingTests(unittest.TestCase):
             with self.assertRaises(osmo_camera.ConfigurationError):
                 osmo_camera.ControlSession.connect(path, approved=True)
 
+    def test_ble_first_approval_and_cancellation_before_io(self) -> None:
+        for ble_first, approve_ble in ((True, False), (False, True)):
+            with self.subTest(ble_first=ble_first, approve_ble=approve_ble):
+                with self.assertRaises(osmo_camera.ConfigurationError):
+                    osmo_camera.ControlSession.connect(
+                        "missing-synthetic-profile.toml",
+                        approved=True,
+                        ble_first=ble_first,
+                        approve_ble=approve_ble,
+                    )
+        cancellation = osmo_camera.Cancellation()
+        cancellation.cancel()
+        with self.assertRaises(osmo_camera.CancelledError):
+            osmo_camera.ControlSession.connect(
+                "missing-synthetic-profile.toml",
+                approved=True,
+                ble_first=True,
+                approve_ble=True,
+                cancellation=cancellation,
+            )
+
     def test_stubs_cover_native_exports_and_members(self) -> None:
         tree = ast.parse(
             Path(_native.__file__).with_name("_native.pyi").read_text(encoding="utf-8")

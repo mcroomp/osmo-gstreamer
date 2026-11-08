@@ -1,20 +1,18 @@
 //! Unofficial Osmo Nano interoperability library.
 //!
 //! Rust owns protocol, transport, camera ownership and bounded lifecycles.
-//! [`CameraProfile`] is a path-independent configuration model; with the `ble`
-//! feature its explicitly approved preview startup can initialize over BLE when
-//! the saved LAN pairing port is unreachable. [`CameraConfig`] entry points
+//! BLE support is always built in. [`CameraProfile`] is a path-independent
+//! configuration model; its explicitly approved preview startup can initialize
+//! over BLE when the saved LAN pairing port is unreachable. [`CameraConfig`] entry points
 //! remain LAN-only. Established-session failures never trigger reconnects.
-//! With `ble`, [`CameraProfile`] provides `connect_control_via_ble`: BLE
+//! [`CameraProfile`] provides `connect_control_via_ble`: BLE
 //! preparation and verification, then saved-network association and one LAN
 //! control connection.
 //! Callers must authorize hardware operations and explicitly close sessions.
 
-#[cfg(feature = "ble")]
 pub mod ble;
 mod camera_profile;
 pub mod control;
-#[cfg(feature = "ble")]
 mod control_startup;
 mod error;
 mod installation_identity;

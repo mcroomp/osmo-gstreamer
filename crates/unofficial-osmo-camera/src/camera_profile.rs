@@ -1,10 +1,18 @@
-use crate::{Error, Result, installation_identity::validate_identity};
+use crate::{
+    CameraConfig, CameraSession, Error, PreviewCancellation, Result,
+    ble::{BleCancellation, BleConfig, BleSession, WifiNetwork},
+    installation_identity::validate_identity,
+    protocol::PAIRING_PORT,
+};
+use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt, fs,
     io::{self, Write},
-    net::IpAddr,
+    net::{IpAddr, SocketAddr, TcpStream},
     path::Path,
+    thread,
+    time::{Duration, Instant},
 };
 
 /// Validated settings for one camera, independent of any repository layout.
@@ -48,18 +56,12 @@ impl Default for CameraProfile {
 impl CameraProfile {
     /// Starts an explicitly approved preview, initializing through BLE only
     /// when the saved LAN pairing port is unreachable. Never reconnects after
-    /// startup or playback failure. Requires the `ble` feature.
-    #[cfg(feature = "ble")]
+    /// startup or playback failure.
     pub fn start_preview(
         &mut self,
         approved: bool,
-        cancellation: &crate::PreviewCancellation,
-    ) -> Result<crate::CameraSession> {
-        use crate::ble::{BleCancellation, BleConfig, BleSession, WifiNetwork};
-        use std::{
-            net::{SocketAddr, TcpStream},
-            time::Duration,
-        };
+        cancellation: &PreviewCancellation,
+    ) -> Result<CameraSession> {
         if !approved {
             return Err(Error::InvalidConfig {
                 field: "allow-writes",
@@ -81,18 +83,18 @@ impl CameraProfile {
         }
         self.to_toml()?;
         match TcpStream::connect_timeout(
-            &SocketAddr::new(host, crate::protocol::PAIRING_PORT),
+            &SocketAddr::new(host, PAIRING_PORT),
             Duration::from_secs(3),
         ) {
             Ok(probe) => {
                 drop(probe);
-                log::info!("Camera pairing port is reachable; skipping BLE initialization");
+                info!("Camera pairing port is reachable; skipping BLE initialization");
                 let identity = self.pairing_identity.clone().ok_or(Error::InvalidConfig {
                     field: "camera profile",
                     reason: "LAN preview requires pairing_identity",
                 })?;
-                return crate::CameraSession::start_preview_cancellable(
-                    crate::CameraConfig {
+                return CameraSession::start_preview_cancellable(
+                    CameraConfig {
                         host,
                         pairing_identity: identity,
                         allow_writes: true,
@@ -109,7 +111,7 @@ impl CameraProfile {
                         | io::ErrorKind::NetworkUnreachable
                 ) =>
             {
-                log::warn!(
+                warn!(
                     "Camera pairing port is unreachable ({error}); initializing once through BLE"
                 );
             }
@@ -134,13 +136,13 @@ impl CameraProfile {
             BleSession::connect_cancellable(config, &BleCancellation::for_preview(cancellation))?;
         self.pairing_identity = Some(ble.pairing_identity().to_owned());
         let startup = (|| {
-            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let deadline = Instant::now() + Duration::from_secs(10);
             loop {
                 if cancellation.is_cancelled() {
                     return Err(Error::Cancelled);
                 }
                 match TcpStream::connect_timeout(
-                    &SocketAddr::new(host, crate::protocol::PAIRING_PORT),
+                    &SocketAddr::new(host, PAIRING_PORT),
                     Duration::from_secs(1),
                 ) {
                     Ok(probe) => {
@@ -156,12 +158,12 @@ impl CameraProfile {
                                 | io::ErrorKind::NetworkUnreachable
                         ) =>
                     {
-                        if std::time::Instant::now() >= deadline {
+                        if Instant::now() >= deadline {
                             return Err(Error::Timeout {
                                 operation: "LAN readiness after BLE initialization; verify the saved camera_ip",
                             });
                         }
-                        std::thread::sleep(Duration::from_millis(100));
+                        thread::sleep(Duration::from_millis(100));
                     }
                     Err(error) => {
                         return Err(Error::io(
@@ -171,7 +173,7 @@ impl CameraProfile {
                     }
                 }
             }
-            log::info!("Camera LAN pairing port is ready after BLE initialization");
+            info!("Camera LAN pairing port is ready after BLE initialization");
             ble.start_preview_cancellable(host, cancellation)
         })();
         match startup {
@@ -305,7 +307,6 @@ fn parse_mac(value: &str) -> Result<[u8; 6]> {
 mod tests {
     use super::*;
 
-    #[cfg(feature = "ble")]
     #[test]
     fn preview_requires_approval_valid_ip_and_respects_cancellation_before_io() {
         let mut profile = CameraProfile::default();

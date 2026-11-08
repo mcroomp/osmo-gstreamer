@@ -42,7 +42,7 @@ if [[ ${published[*]} == 'true true' ]]; then
     exit 0
 fi
 # Match the audited source job; publish dry runs do not retain archives here.
-if ! cargo package --locked --workspace --all-features; then
+if ! cargo package --locked --workspace; then
     echo 'Pre-publication packaging and verification failed.' >&2
     exit 1
 fi
@@ -64,7 +64,7 @@ for i in "${!names[@]}"; do
         continue
     fi
     name=${names[$i]}
-    if ! cargo publish --locked --registry crates-io -p "$name" --all-features; then
+    if ! cargo publish --locked --registry crates-io -p "$name"; then
         echo "Publishing $name failed. Check crates.io before retrying; an upload may have succeeded." >&2
         exit 1
     fi

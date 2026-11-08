@@ -43,9 +43,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev pkg-config
       - run: cargo fmt --all -- --check
       - run: cargo fmt --manifest-path python/unofficial-osmo-camera/Cargo.toml -- --check
-      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo clippy --locked --manifest-path python/unofficial-osmo-camera/Cargo.toml --all-targets --features stubgen -- -D warnings
-      - run: cargo doc --locked --workspace --all-features --no-deps
+      - run: cargo doc --locked --workspace --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
       - run: uv sync --locked
@@ -79,7 +79,6 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - run: cargo test --locked -p unofficial-osmo-camera
-      - run: cargo test --locked -p unofficial-osmo-camera --features ble
 
   msrv:
     runs-on: ubuntu-latest
@@ -91,6 +90,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
         with:
           toolchain: "1.92.0"
+      - name: Install BLE development libraries
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - run: cargo +1.92.0 test --locked -p unofficial-osmo-camera
 
   gstreamer:
@@ -106,7 +107,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install GStreamer SDK and inspection tool
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-tools pkg-config
-      - run: cargo test --locked --workspace --all-features
+      - run: cargo test --locked --workspace
       - run: cargo build --locked -p gst-plugin-unofficial-osmo
       - run: gst-inspect-1.0 osmosrc
         env:

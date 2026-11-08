@@ -20,7 +20,7 @@ name = "gstosmo"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-unofficial-osmo-camera = { version = "=0.2.0", path = "../unofficial-osmo-camera", features = ["ble"] }
+unofficial-osmo-camera = { version = "=0.2.0", path = "../unofficial-osmo-camera" }
 gstreamer.workspace = true
 gstreamer-base.workspace = true
 log.workspace = true

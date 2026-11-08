@@ -75,11 +75,6 @@ impl ControlSession {
                 reason: "ble_first and approve_ble must both be explicitly enabled",
             }));
         }
-        if ble_first && !cfg!(feature = "ble") {
-            return Err(camera_error(Error::Unsupported(
-                "BLE-first startup requires rebuilding the Python extension with the ble feature",
-            )));
-        }
         let cancellation = cancellation
             .map(|token| token.inner.clone())
             .unwrap_or_default();
@@ -90,7 +85,6 @@ impl ControlSession {
                 }
                 let profile = CameraProfile::from_file(profile_path)
                     .map_err(|source| Error::io("read camera profile", source))?;
-                #[cfg(feature = "ble")]
                 if ble_first {
                     return profile.connect_control_via_ble(approve_ble, &cancellation);
                 }

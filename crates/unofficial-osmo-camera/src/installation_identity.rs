@@ -1,10 +1,10 @@
 use crate::{Error, Result};
+use uuid::Uuid;
 
 pub(crate) const IDENTITY_LENGTH: usize = 32;
 
-#[cfg(feature = "ble")]
 pub(crate) fn new_identity() -> String {
-    uuid::Uuid::new_v4().simple().to_string()
+    Uuid::new_v4().simple().to_string()
 }
 
 pub(crate) fn validate_identity(identity: &str) -> Result<()> {

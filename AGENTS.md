@@ -95,6 +95,10 @@ provenance or safety requirements. Use [README.md](README.md) for build commands
 
 ## Tooling, validation and release
 
+- Do not create Rust/Cargo features without explicit user or maintainer
+  authorization. This includes forwarding features and implicit features
+  introduced by optional dependencies.
+
 - In every Rust file, place module documentation first, then a consolidated
   block of `use` statements, then item documentation and declarations. Use
   imports instead of fully qualified names in declarations, attributes and

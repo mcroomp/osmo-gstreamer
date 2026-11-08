@@ -29,8 +29,8 @@ crate and its descendants.
 - `allow-writes=true` authorizes initial BLE wake/pairing and saved Wi-Fi
   association only when the profile's LAN pairing port is unreachable. Preserve
   this Rust-owned startup policy; playback failures do not authorize fallback.
-- From the root, run `cargo test --locked --workspace --all-features`,
-  `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` and
+- From the root, run `cargo test --locked --workspace`,
+  `cargo clippy --locked --workspace --all-targets -- -D warnings` and
   `cargo fmt --all -- --check`.
 - Review plugin metadata and release binaries for unofficial wording, required
   dependency notices and private build paths. Do not bundle vendor software,
