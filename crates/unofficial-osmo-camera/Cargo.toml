@@ -39,8 +39,8 @@ windows = { version = "0.62", features = [
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-netlink-packet-route = "0.33"
-rtnetlink = "0.23"
+netlink-packet-route = "0.34"
+rtnetlink = "0.24"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
